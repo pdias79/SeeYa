@@ -16,18 +16,18 @@ void RadarPresence::begin(HardwareSerial &port, int rxPin, int txPin) {
 }
 bool RadarPresence::decodeFrame(const uint8_t *p, size_t len) {
   // Basic report: header(4), length(2)=0x000d, data(13), footer(4).
-  // Data: 02 AA 03 state moveDist(2) moveEnergy stillDist(2)
+  // Data: 02 AA state moveDist(2) moveEnergy stillDist(2)
   // stillEnergy detectionDist(2) 55 00
   if (len != 23 || u16(p+4) != 13) return false;
   if (memcmp(p,HEAD,4) != 0 || memcmp(p+19,TAIL,4) != 0) return false;
   const uint8_t *d = p+6;
-  if (d[0] != 0x02 || d[1] != 0xAA || d[2] != 0x03 ||
-      d[11] != 0x55 || d[12] != 0 || d[3] > 3) return false;
-  targetState_ = d[3];
-  movingCm_ = u16(d+4);
-  movingEnergy_ = d[6];
-  stationaryCm_ = u16(d+7);
-  stationaryEnergy_ = d[9];
+  if (d[0] != 0x02 || d[1] != 0xAA ||
+      d[11] != 0x55 || d[12] != 0 || d[2] > 3) return false;
+  targetState_ = d[2];
+  movingCm_ = u16(d+3);
+  movingEnergy_ = d[5];
+  stationaryCm_ = u16(d+6);
+  stationaryEnergy_ = d[8];
   everReceived_ = true;
   lastFrameMs_ = millis();
   ++frames_;

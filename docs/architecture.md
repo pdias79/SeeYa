@@ -23,14 +23,16 @@ Firmware ESP32-C3 commandant un relais d'éclairage à partir d'un radar mmWave 
 9. `WifiManager` : connexion STA, reconnexion et mode d'accès provisoire lors de la première installation.
 
 ## Sémantique proposée
-- Mode AUTO : une présence détectée allume le relais si une plage horaire autorise l'automatisation.
+- Mode AUTO : deux automatismes indépendants calculent leurs demandes d'allumage : (a) le radar avec son délai d'extinction, (b) le calendrier hebdomadaire qui demande ON pendant ses plages horaires. Le relais est ON si et seulement si l'un des deux demande ON.
 - Quand la présence disparaît, le relais reste allumé pendant le délai configuré, puis s'éteint. La présence renouvelée réarme le délai.
 - Mode FORCE_ON et FORCE_OFF : ordre manuel explicite prioritaire sur radar et calendrier. Retour à AUTO par commande HTTP ou éventuellement expiration de l'override (option future).
-- Plages horaires : par défaut, contrôlent **l'autorisation de détection**, elles ne forcent pas un éclairage permanent. Un futur type de règle « ON forcé » reste possible.
-- Si NTP indisponible au démarrage et qu'une programmation est configurée, comportement de repli à définir (choix recommandé : automatisme désactivé tant que l'heure n'est pas fiable; les commandes manuelles restent utilisables).
+- Plages horaires : elles pilotent directement une demande d'allumage, indépendamment du radar. À la fin de la plage, la demande du calendrier passe à OFF, sans empêcher la demande radar de maintenir le relais allumé. Les règles multiples se combinent par OU (une plage active suffit).
+- Si l'heure n'est pas fiable au démarrage (NTP indisponible et aucune heure conservée valide), seule la demande du calendrier est désactivée ; la détection radar demeure fonctionnelle ainsi que les commandes manuelles.
 - Au démarrage, relais OFF par défaut ; après redémarrage, retour en AUTO.
 - Absence de trames radar pendant une durée configurée : capteur déclaré défaillant ; ignorer l'ancienne présence et ne jamais laisser un relais allumé indéfiniment sur un état périmé.
 - Toute transition du relais est calculée par LightingController, jamais directement par l'API ou les capteurs.
+- Priorité : FORCE_ON > automatisations et FORCE_OFF > automatisations ; en AUTO, `relayOn = radarRequest || scheduleRequest`. Les commandes manuelles restent en vigueur jusqu'au retour explicite à AUTO.
+- Le calendrier et le radar peuvent chacun être désactivés dans la configuration sans désactiver l'autre.
 
 ## API HTTP locale proposée
 | Méthode | Route | Effet |
@@ -58,7 +60,7 @@ Prévoir des alias GET simples (par ex. `/api/light?state=on`) uniquement si dem
   ]
 }
 ```
-Les jours sont 1=lundi à 7=dimanche. Hors plages horaires, AUTO reste désactivé lorsque des horaires existent. Sans horaires configurés, AUTO est autorisé toute la semaine.
+Les jours sont 1=lundi à 7=dimanche. Hors plages horaires, seule la demande du calendrier est OFF ; la détection radar reste active en permanence. Sans horaires configurés, seule la demande radar intervient en AUTO.
 
 ## Matériel et précautions
 - LD2410C : alimentation 5 V recommandée, UART TTL 3,3 V, sortie OUT 3,3 V (optionnelle).
@@ -78,5 +80,5 @@ Les jours sont 1=lundi à 7=dimanche. Hors plages horaires, AUTO reste désactiv
 ## Points à valider sur le matériel
 - Référence précise de la carte ESP32-C3 et GPIO disponibles.
 - Référence et tension d'activation du module relais ; alimentation générale.
-- Sens exact de la programmation horaire (autorisation AUTO ou ON/OFF imposés).
+- Programmation confirmée : le calendrier force une demande ON pendant chaque plage, indépendamment de la détection, avec combinaison OU en mode AUTO.
 - Politique de sécurité si NTP ou radar ne répondent plus.

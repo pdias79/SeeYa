@@ -70,6 +70,35 @@ Prévoir des alias GET simples (par ex. `/api/light?state=on`) uniquement si dem
 ```
 Les jours sont 1=lundi à 7=dimanche. Hors plages horaires, seule la demande du calendrier est OFF ; la détection radar reste active en permanence. Sans horaires configurés, seule la demande radar intervient en AUTO.
 
+## Personnalisation des détecteurs
+### Interface commune
+- Activation/désactivation de la demande radar (sans affecter le calendrier), temporisation d'extinction SeeYa, santé du module, version radar et indicateurs de détection.
+- Configuration spécifique selon le radar sélectionné ; lire les paramètres réels par UART et confirmer les modifications.
+- Boutons lecture/sauvegarde des paramètres, restauration des paramètres usine (action explicite) et diagnostic en direct. Éviter les écritures répétées dans la mémoire non volatile du radar.
+
+### LD2410C
+- Gates de distance, sensibilité séparée mouvement / statique par gate ; distance maximale de mouvement et de présence statique, délai d'absence propre au radar.
+- Résolution de distance de 0,75 m ou 0,20 m si supportée par la version matérielle/firmware.
+- Mode engineering pour visualiser en temps réel l'énergie des tranches ; ne pas confondre le délai interne du radar avec le délai d'extinction SeeYa.
+- Les gates filtrent radialement, pas de zones latérales ou polygonales possibles avec les données du LD2410C.
+
+### LD2450
+- Suivi 1 cible ou jusqu'à 3 cibles, coordonnées X/Y et vitesse selon le protocole.
+- Zones natives du radar : jusqu'à 3 rectangles, mode inclusion OU exclusion, configuration persistée dans le module.
+- Filtrage logiciel supplémentaire dans SeeYa : zones polygonales de présence et zones à exclure, traitement par coordonnées X/Y de chaque cible, paramètres sauvegardés dans la configuration SeeYa. En première version, préférer filtrage logiciel seul pour éviter les interactions surprenantes avec les zones natives persistées dans le radar ; à l'initialisation, contrôler la configuration native et signaler toute restriction active.
+- Représentation du radar en (0,0), orientation et limites géométriques configurables ; vue de dessus indiquant les cibles (non identifiants humains permanents), les zones et les événements.
+- L'affichage de formes géométriques ne garantit pas une détection parfaite : incertitudes radar, masquage, réflexions, pertes de suivi et difficulté à détecter des personnes immobiles.
+- Délai court de maintien lors d'une disparition momentanée de cible, distinct du délai d'extinction de la lumière ; journal de diagnostic optionnel.
+
+### Vues Web recommandées
+- LD2410C : tableau de seuils par gate, réglages de portée et barres d'énergie.
+- LD2450 : plan XY avec visualisation de cibles en temps réel et édition graphique des zones.
+- Paramètres simples en priorité, onglet « avancé » et presets (petite pièce, grande pièce, seuil anti-déclenchement) uniquement après tests terrain.
+
+Références techniques :
+- LD2410C : https://github.com/ncmreynolds/ld2410/blob/main/docs/HLK-LD2410C_protocol.md
+- LD2450 : https://make.net.za/wp-content/datasheets/HLK%20LD2450%20Serial%20Communication%20Protocol%20v1.03.pdf
+
 ## Contrôle d'éclairage : choix de sortie
 La **demande logique** est commune aux deux sorties : la détection radar, les horaires et les commandes HTTP entrantes ne dépendent pas du moyen de commande de la lumière.
 

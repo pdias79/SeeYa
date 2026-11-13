@@ -117,6 +117,25 @@ Exemple de configuration pour une sortie HTTP (URL fictives) :
 - Relais : alimentation adaptée, transistor/driver et diode de roue libre si nécessaire ; ne pas supposer que le boot garantit OFF sans circuit externe ; contrôler la polarité réelle du module et l'absence d'impulsions au démarrage.
 - Pour une lampe secteur 230 V, employer un module certifié avec isolation et boîtier adaptés; ne pas câbler le secteur sur une breadboard.
 
+## Développement et mise à jour OTA
+- Développement recommandé : PlatformIO + framework Arduino, carte ESP32-C3 SuperMini ; référence initiale `esp32-c3-devkitm-1` à adapter après vérification des caractéristiques exactes de la carte.
+- Premier flash par USB. Ensuite, mise à jour du firmware via page Web locale protégée : dépôt manuel de `firmware.bin`, validation, écriture dans la partition OTA inactive puis redémarrage.
+- La table de partitions doit contenir au minimum `otadata`, `ota_0` et `ota_1`. Prendre en compte la capacité Flash réelle (typiquement 4 Mo) et le stockage de l'interface Web.
+- Prévoir une stratégie explicite de rollback et de validation du nouveau firmware au démarrage. Une mise à jour interrompue ne doit pas corrompre l'image active.
+- Conserver Wi-Fi, horaires, sortie, polarités et réglages radar en NVS ; ajouter un numéro de version du schéma de configuration et des migrations compatibles.
+- L'upload OTA doit imposer une authentification, vérifier la taille, la compatibilité de l'image, contrôler la fin du transfert et ne jamais accepter des firmwares arbitraires depuis Internet.
+- Pendant l'OTA, garder un état de sortie défini et expliciter le comportement de l'éclairage lors du redémarrage.
+- Phase ultérieure : GitHub Actions pour compiler, tester et créer une Release contenant le firmware, puis bouton de téléchargement/installation de cette Release dans SeeYa (uniquement mise à jour explicitement demandée). HTTPS avec validation TLS et contrôle d'intégrité/authenticité du binaire.
+- Éviter de modifier la table de partitions après déploiement, car cette opération peut nécessiter un nouveau flash par USB.
+
+### Itérations
+1. Wi-Fi, LED, page Web de statut et mise à jour OTA par fichier (USB une fois).
+2. Sorties locales et HTTP, API de commande et configuration persistante.
+3. Capteur LD2410C puis LD2450 avec contrat commun.
+4. Heure NTP et programmations indépendantes de la détection.
+5. Interface Web complète, diagnostics et cas d'erreur.
+6. CI GitHub, binaires versionnés et mise à jour à partir d'une Release.
+
 ## Découpage de réalisation
 1. Base PlatformIO, configuration GPIO et relais, tests unitaires de la logique.
 2. Pilote LD2410C, test de l'état de présence.

@@ -77,8 +77,16 @@ Les jours sont 1=lundi à 7=dimanche. Hors plages horaires, seule la demande du 
 5. Programmation hebdomadaire, sauvegarde NVS et sécurité.
 6. Tests de redémarrage, absence Wi-Fi/NTP, capteur hors ligne, changement d'heure et minuterie.
 
+
+## Carte de développement retenue (provisoire)
+- ESP32-C3 SuperMini (format environ 18 x 23 mm, USB-C), d'après photographie fournie.
+- Affectation GPIO proposée : GPIO4 = RX radar (relié à TX du radar), GPIO5 = TX radar (relié à RX du radar), GPIO7 = commande relais.
+- Masse commune, alimentation radar à vérifier suivant module; ne pas alimenter la bobine d'un relais directement par le GPIO.
+- GPIO2, GPIO8, GPIO9 sont des broches de strapping à éviter pour ce projet ; GPIO8 porte généralement une LED embarquée et GPIO9 le bouton BOOT. GPIO18/19 restent réservées à l'USB natif.
+- Les valeurs de tension, la polarité du relais et la disponibilité d'une alimentation 5 V suffisante restent à valider avant branchement.
+
 ## Points à valider sur le matériel
-- Référence précise de la carte ESP32-C3 et GPIO disponibles.
+- Confirmer le brochage exact de la variante SuperMini en possession (les clones diffèrent).
 - Référence et tension d'activation du module relais ; alimentation générale.
 - Programmation confirmée : le calendrier force une demande ON pendant chaque plage, indépendamment de la détection, avec combinaison OU en mode AUTO.
 - Politique de sécurité si NTP ou radar ne répondent plus.

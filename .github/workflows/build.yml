@@ -1,0 +1,26 @@
+name: Build ESP32-C3 firmware
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: python -m pip install platformio
+      - name: Build ESP32-C3
+        run: pio run -e esp32-c3-supermini
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: seeya-esp32-c3-firmware
+          path: .pio/build/esp32-c3-supermini/firmware.bin
+          if-no-files-found: error

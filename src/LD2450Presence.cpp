@@ -51,7 +51,7 @@ uint8_t LD2450Presence::count() const {
 }
 void LD2450Presence::begin(HardwareSerial &port, int rxPin, int txPin) {
   port_=&port;
-  received_=0; everReceived_=false; frames_=0;
+  received_=0; everReceived_=false; frames_=0; bytesReceived_=0;
   for(auto &t:targets_) t=Target{};
   port_->setRxBufferSize(1024);
   port_->begin(256000, SERIAL_8N1, rxPin, txPin);
@@ -78,5 +78,5 @@ void LD2450Presence::consume(uint8_t b) {
 void LD2450Presence::update() {
   if(!port_)return;
   size_t count=0;
-  while(port_->available() && count++<128)consume(uint8_t(port_->read()));
+  while(port_->available() && count++<128) {++bytesReceived_; consume(uint8_t(port_->read()));}
 }

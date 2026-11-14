@@ -15,11 +15,13 @@ public:
   uint8_t movingEnergy() const { return movingEnergy_; }
   uint8_t stationaryEnergy() const { return stationaryEnergy_; }
   uint32_t frames() const { return frames_; }
+  uint32_t bytesReceived() const { return bytesReceived_; }
 private:
   HardwareSerial *port_=nullptr;
   uint8_t data_[64]={};
   size_t received_=0;
   bool everReceived_=false;
+  uint32_t bytesReceived_=0;
   uint32_t lastFrameMs_=0;
   uint32_t frames_=0;
   uint8_t targetState_=0, movingEnergy_=0, stationaryEnergy_=0;

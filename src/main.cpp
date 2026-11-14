@@ -6,6 +6,8 @@
 #include "LightOutput.h"
 #include "RadarPresence.h"
 #include "LD2450Presence.h"
+#include "WeeklySchedule.h"
+#include <time.h>
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -22,11 +24,15 @@ LightOutput output;
 HardwareSerial radarUart(1);
 RadarPresence radar;
 LD2450Presence radar2450;
+WeeklySchedule schedule;
 // 0 = disabled; 1 = LD2410C; 2 = LD2450
 uint8_t sensorType = 0;
 uint32_t offDelaySeconds = 90;
 bool radarHold = false;
 bool previousPresence = false;
+bool scheduleOn = false;
+bool clockReady = false;
+char localTimeText[32] = "not synchronized";
 uint32_t lastPresenceMs = 0;
 enum class Mode { Auto, ForceOn, ForceOff };
 Mode mode = Mode::Auto;
@@ -65,6 +71,24 @@ void logRadarStatus() {
   }
 }
 
+void updateClockAndSchedule() {
+  const time_t now=time(nullptr);
+  clockReady = now >= 1735689600; // refuse bogus pre-2025 clock values
+  scheduleOn=false;
+  if(!clockReady) {
+    snprintf(localTimeText,sizeof(localTimeText),"not synchronized");
+    return;
+  }
+  struct tm local;
+  if(localtime_r(&now,&local)==nullptr) {
+    clockReady=false;
+    snprintf(localTimeText,sizeof(localTimeText),"not synchronized");
+    return;
+  }
+  strftime(localTimeText,sizeof(localTimeText),"%Y-%m-%d %H:%M:%S",&local);
+  scheduleOn=schedule.active(local);
+}
+bool autoLightRequested() { return radarHold || scheduleOn; }
 const char *modeName() {
   switch (mode) {
     case Mode::ForceOn: return "FORCE_ON";
@@ -89,6 +113,12 @@ void status() {
   json += modeName();
   json += "\",\"requestedOn\":";
   json += output.requested() ? "true" : "false";
+  json += ",\"clockReady\":";
+  json += clockReady ? "true":"false";
+  json += ",\"localTime\":\"";
+  json += localTimeText;
+  json += "\",\"scheduleOn\":";
+  json += scheduleOn ? "true":"false";
   const bool is2410=sensorType==1;
   const bool is2450=sensorType==2;
   const bool health=is2410?radar.healthy():(is2450&&radar2450.healthy());
@@ -220,12 +250,61 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <button type="submit">Enregistrer la zone</button>
 </form><div id="targetView">Aucune cible</div>
 </section>
+<section><h2>Programmation horaire (Europe/Paris)</h2>
+<p><small>Une plage par jour. Les plages qui dépassent minuit continuent le lendemain. En AUTO, le radar OU le programme peut allumer la sortie. Sans synchronisation NTP, aucun programme ne s'active.</small></p>
+<p>Horloge : <strong id="clockText">Synchronisation...</strong> — Programme : <strong id="scheduleText">inactif</strong></p>
+<form id="scheduleForm">
+<div id="scheduleDays"></div>
+<button type="submit">Enregistrer le programme</button>
+</form>
+<p id="scheduleMessage" role="status" aria-live="polite"></p>
+</section>
 <section><h2>Firmware OTA</h2>
 <form action="/update" method="post" enctype="multipart/form-data">
 <input type="file" name="firmware" accept=".bin" required>
 <button type="submit">Installer firmware.bin</button></form>
 <p><small>Ne pas couper l'alimentation durant le transfert.</small></p></section>
 <script>
+const weekdays=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
+const scheduleDays=document.getElementById('scheduleDays');
+scheduleDays.innerHTML=weekdays.map((name,i)=>'<label>'+name+
+ ' <input type="checkbox" id="schedEnabled'+i+'"> Actif'+
+ ' <input type="time" id="schedStart'+i+'" value="18:00"> à '+
+ ' <input type="time" id="schedEnd'+i+'" value="22:00"></label>').join('');
+function minutes(t) {
+ if(!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(t))throw Error('Heure incorrecte : '+t);
+ return Number(t.slice(0,2))*60+Number(t.slice(3));
+}
+function hhmm(min) {return String(Math.floor(min/60)).padStart(2,'0')+':'+String(min%60).padStart(2,'0');}
+async function loadSchedule() {
+ const r=await fetch('/api/schedule',{cache:'no-store'});
+ if(!r.ok)throw Error('HTTP '+r.status);
+ const d=await r.json();
+ for(let i=0;i<7;++i) {
+  document.getElementById('schedEnabled'+i).checked=d.days[i].enabled;
+  document.getElementById('schedStart'+i).value=hhmm(d.days[i].startMin);
+  document.getElementById('schedEnd'+i).value=hhmm(d.days[i].endMin);
+ }
+}
+document.getElementById('scheduleForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const message=document.getElementById('scheduleMessage');
+ try {
+  const data=new URLSearchParams();
+  for(let i=0;i<7;++i) {
+   const start=minutes(document.getElementById('schedStart'+i).value);
+   const end=minutes(document.getElementById('schedEnd'+i).value);
+   if(start===end)throw Error('Horaires identiques : '+weekdays[i]);
+   data.set('e'+i,document.getElementById('schedEnabled'+i).checked?'true':'false');
+   data.set('s'+i,String(start));data.set('f'+i,String(end));
+  }
+  const r=await fetch('/api/schedule',{method:'POST',body:data});
+  if(!r.ok)throw Error('HTTP '+r.status+' : '+await r.text());
+  message.textContent='Programme enregistré';
+  await refresh();
+ }catch(error){message.textContent='Erreur : '+error.message;}
+});
+loadSchedule().catch(error=>{document.getElementById('scheduleMessage').textContent=error.message;});
 let radarFormDirty=false;
 document.getElementById('sensorType').addEventListener('change',()=>{radarFormDirty=true;});
 document.getElementById('offDelay').addEventListener('input',()=>{radarFormDirty=true;});
@@ -234,6 +313,8 @@ async function refresh(){
   const r=await fetch('/api/status');const d=await r.json();
   document.getElementById('status').textContent=JSON.stringify(d,null,2);
   document.getElementById('firmwareVersion').textContent=d.version;
+  document.getElementById('clockText').textContent=d.localTime;
+  document.getElementById('scheduleText').textContent=d.scheduleOn?'ACTIF':'inactif';
  if(!radarFormDirty)document.getElementById('sensorType').value=d.sensorType;
  document.getElementById('zoneSection').hidden=document.getElementById('sensorType').value!=='ld2450';
  const zoneKeys=['zoneMinX','zoneMaxX','zoneMinY','zoneMaxY'];
@@ -320,7 +401,56 @@ void setupRoutes() {
   });
   server.on("/api/light/auto", HTTP_POST, []() {
     if (!authorize()) return;
-    mode = Mode::Auto; output.request(radarHold); status(); // schedules pending
+    mode = Mode::Auto; updateClockAndSchedule(); output.request(autoLightRequested()); status();
+  });
+  server.on("/api/schedule", HTTP_GET, []() {
+    if(!authorize())return;
+    String response="{\"days\":[";
+    for(size_t i=0;i<7;++i) {
+      if(i)response+=",";
+      const auto &d=schedule.day(i);
+      response += "{\"enabled\":";
+      response += d.enabled?"true":"false";
+      response += ",\"startMin\":" + String(d.startMin);
+      response += ",\"endMin\":" + String(d.endMin) + "}";
+    }
+    response += "]}";
+    jsonHeader();server.send(200,"application/json",response);
+  });
+  server.on("/api/schedule", HTTP_POST, []() {
+    if(!authorize())return;
+    WeeklySchedule::Day proposed[7];
+    for(size_t i=0;i<7;++i) {
+      const String suffix=String(i);
+      String enabled=server.arg("e"+suffix);
+      if(enabled!="true"&&enabled!="false"){
+        server.send(400,"text/plain","Invalid enabled flag");return;
+      }
+      proposed[i].enabled=enabled=="true";
+      const char *prefixes[2]={"s","f"};
+      uint16_t minutes[2]={};
+      for(int j=0;j<2;++j) {
+        const String value=server.arg(String(prefixes[j])+suffix);
+        if(value.isEmpty()||value.length()>4){
+          server.send(400,"text/plain","Invalid time");return;
+        }
+        for(size_t k=0;k<value.length();++k)if(!isDigit(value[k])) {
+          server.send(400,"text/plain","Invalid time");return;
+        }
+        long minute=value.toInt();
+        if(minute<0||minute>=1440){server.send(400,"text/plain","Time out of range");return;}
+        minutes[j]=(uint16_t)minute;
+      }
+      proposed[i].startMin=minutes[0]; proposed[i].endMin=minutes[1];
+      if(!WeeklySchedule::valid(proposed[i])){
+        server.send(400,"text/plain","Invalid interval");return;
+      }
+    }
+    for(size_t i=0;i<7;++i)schedule.setDay(i,proposed[i]);
+    schedule.save();
+    updateClockAndSchedule();
+    if(mode==Mode::Auto)output.request(autoLightRequested());
+    server.send(200,"application/json","{\"saved\":true}");
   });
   server.on("/api/radar", HTTP_POST, []() {
     if (!authorize()) return;
@@ -354,7 +484,7 @@ void setupRoutes() {
     }
     prefs.putUChar("sensorType",sensorType);
     prefs.remove("radarOn");
-    if(mode==Mode::Auto) output.request(false);
+    if(mode==Mode::Auto) { updateClockAndSchedule(); output.request(autoLightRequested()); }
     status();
   });
   server.on("/api/radar/zone", HTTP_POST, [](){
@@ -466,6 +596,7 @@ void setup() {
   Serial.println("[SeeYa] Radar UART1: ESP RX=GPIO4 (radar TX), ESP TX=GPIO5 (radar RX), 256000 bauds");
   prefs.begin("seeya", false);
   output.begin(prefs);
+  schedule.begin(prefs);
   offDelaySeconds=prefs.getUInt("offDelay",90);
   if(offDelaySeconds<1 || offDelaySeconds>86400)offDelaySeconds=90;
   sensorType=prefs.getUChar("sensorType",prefs.getBool("radarOn",false)?1:0);
@@ -488,6 +619,8 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(SEEYA_WIFI_SSID, SEEYA_WIFI_PASSWORD);
+  // French civil time with automatic CET/CEST daylight-saving transitions.
+  configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3","pool.ntp.org","time.google.com");
   setupRoutes();
 }
 void loop() {
@@ -504,7 +637,8 @@ void loop() {
     }
     // The holding timer still expires after loss of radar communication.
   } else radarHold=false;
-  if(mode==Mode::Auto)output.request(radarHold);
+  updateClockAndSchedule();
+  if(mode==Mode::Auto)output.request(autoLightRequested());
   server.handleClient();
   output.update();
   logRadarStatus();

@@ -268,6 +268,9 @@ button{border:1px solid #aaa;border-radius:6px;cursor:pointer;margin-right:8px}
 section{padding:16px;border:1px solid #ddd;border-radius:10px;margin:16px 0}
 label{display:block;margin-top:12px}input[type=url]{width:95%}
 small{color:#666}pre{white-space:pre-wrap;word-break:break-word}
+#radarMap{display:block;width:100%;height:auto;border:1px solid #ccd4dc;border-radius:8px;background:#f8fafc;touch-action:pan-y}
+#radarMap.draw{cursor:crosshair;touch-action:none}
+#radarInfo{font-size:14px;min-height:1.4em}
 </style></head><body><h1>SeeYa</h1>
 <p>ESP32-C3 — firmware <span id="firmwareVersion">…</span></p>
 <section><h2>Éclairage</h2><pre id="status">Chargement…</pre>
@@ -314,7 +317,14 @@ Le protocole HTTP est limité à des URL http:// dans cette version expérimenta
 </form><small>UART 256000 bauds : TX radar vers GPIO4, RX radar vers GPIO5.
 La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</small>
 </section>
-<section id="zoneSection"><h2>LD2450 — Zone rectangulaire</h2>
+<section id="zoneSection"><h2>LD2450 — Position des cibles</h2>
+<p><small>Vue de dessus : radar en bas au centre, X horizontal (−6 à +6 m), Y vers l'avant (0 à 6 m).
+Les cibles sont actualisées automatiquement. Vert = dans la zone, orange = hors zone.</small></p>
+<canvas id="radarMap" width="720" height="390" aria-label="Plan radar LD2450 avec cibles et zone"></canvas>
+<p id="radarInfo" role="status">En attente du radar…</p>
+<label><input id="zoneDraw" type="checkbox"> Dessiner la zone sur le plan (glisser du premier coin au second)</label>
+<p><small>La sélection graphique modifie les coordonnées ci-dessous. Cliquer sur Enregistrer la zone pour les appliquer au radar.</small></p>
+<h3>Zone rectangulaire</h3>
 <form onsubmit="saveZone(event)">
 <label><input type="checkbox" id="zoneEnabled"> Activer le filtre de zone</label>
 <p><small>Coordonnées en millimètres, origine au radar. X : latéral (±6000), Y : devant le radar (0 à 6000).</small></p>
@@ -323,7 +333,7 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <label>Y min <input id="zoneMinY" type="number" min="0" max="6000" value="0"></label>
 <label>Y max <input id="zoneMaxY" type="number" min="0" max="6000" value="4000"></label>
 <button type="submit">Enregistrer la zone</button>
-</form><div id="targetView">Aucune cible</div>
+</form><p id="zoneMessage" role="status"></p>
 </section>
 <section><h2>Programmation hebdomadaire — 10 événements</h2>
 <p><small>Chaque événement définit ON, OFF ou Désactivé, une heure et des jours (L M M J V S D). Le dernier événement applicable détermine l'état du programme. Le radar peut toujours allumer en AUTO, même après un événement OFF.</small></p>
@@ -417,6 +427,140 @@ let radarFormDirty=false;
 document.getElementById('sensorType').addEventListener('change',()=>{radarFormDirty=true;});
 document.getElementById('onDelay').addEventListener('input',()=>{radarFormDirty=true;});
 document.getElementById('offDelay').addEventListener('input',()=>{radarFormDirty=true;});
+// LD2450 top-view: X = [-6000,6000] mm, Y = [0,6000] mm.
+// Never treat the LD2410C distance-only measurements as X/Y coordinates.
+const radarCanvas=document.getElementById('radarMap');
+const radarCtx=radarCanvas.getContext('2d');
+const plot={left:54,right:702,top:24,bottom:349};
+const zoneFields=['zoneMinX','zoneMaxX','zoneMinY','zoneMaxY'];
+let zoneDirty=false,radarLive=null,dragStart=null,dragEnd=null,radarPolling=false;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const xPixel=x=>plot.left+(x+6000)/12000*(plot.right-plot.left);
+const yPixel=y=>plot.bottom-y/6000*(plot.bottom-plot.top);
+function canvasPoint(e){
+ const rect=radarCanvas.getBoundingClientRect();
+ const px=(e.clientX-rect.left)*radarCanvas.width/rect.width;
+ const py=(e.clientY-rect.top)*radarCanvas.height/rect.height;
+ return {
+  x:clamp(Math.round(((px-plot.left)/(plot.right-plot.left)*12000-6000)/100)*100,-6000,6000),
+  y:clamp(Math.round(((plot.bottom-py)/(plot.bottom-plot.top)*6000)/100)*100,0,6000)
+ };
+}
+function readZone(){
+ return Object.fromEntries(zoneFields.map(k=>[k,Number(document.getElementById(k).value)]));
+}
+function drawRadar(){
+ const c=radarCtx;
+ c.clearRect(0,0,720,390);
+ c.fillStyle='#f8fafc';c.fillRect(0,0,720,390);
+ c.font='12px system-ui';c.lineWidth=1;
+ for(let x=-6000;x<=6000;x+=2000){
+  const px=xPixel(x);
+  c.strokeStyle=x===0?'#8ca0b3':'#d9e1e9';
+  c.beginPath();c.moveTo(px,plot.top);c.lineTo(px,plot.bottom);c.stroke();
+  c.fillStyle='#46576a';c.textAlign='center';c.fillText(String(x/1000),px,plot.bottom+17);
+ }
+ for(let y=0;y<=6000;y+=1000){
+  const py=yPixel(y);
+  c.strokeStyle='#d9e1e9';c.beginPath();c.moveTo(plot.left,py);c.lineTo(plot.right,py);c.stroke();
+  c.fillStyle='#46576a';c.textAlign='right';c.fillText(String(y/1000),plot.left-8,py+4);
+ }
+ c.textAlign='left';c.fillStyle='#334155';c.fillText('Y (m)',8,15);
+ c.textAlign='right';c.fillText('X (m)',plot.right,383);
+ c.strokeStyle='#94a3b8';c.strokeRect(plot.left,plot.top,plot.right-plot.left,plot.bottom-plot.top);
+ const z=readZone(),valid=zoneFields.every(k=>Number.isFinite(z[k]))&&
+   z.zoneMinX<z.zoneMaxX&&z.zoneMinY<z.zoneMaxY;
+ if(valid) {
+  const left=xPixel(clamp(z.zoneMinX,-6000,6000));
+  const top=yPixel(clamp(z.zoneMaxY,0,6000));
+  const width=xPixel(clamp(z.zoneMaxX,-6000,6000))-left;
+  const height=yPixel(clamp(z.zoneMinY,0,6000))-top;
+  c.fillStyle=document.getElementById('zoneEnabled').checked?'rgba(34,197,94,.10)':'rgba(100,116,139,.06)';
+  c.strokeStyle=document.getElementById('zoneEnabled').checked?'#16a34a':'#64748b';
+  c.lineWidth=2;c.setLineDash(document.getElementById('zoneEnabled').checked?[]:[7,5]);
+  c.fillRect(left,top,width,height);c.strokeRect(left,top,width,height);
+  c.setLineDash([]);
+ }
+ if(dragStart&&dragEnd){
+  const x1=xPixel(Math.min(dragStart.x,dragEnd.x)),x2=xPixel(Math.max(dragStart.x,dragEnd.x));
+  const y1=yPixel(Math.max(dragStart.y,dragEnd.y)),y2=yPixel(Math.min(dragStart.y,dragEnd.y));
+  c.fillStyle='rgba(37,99,235,.10)';c.fillRect(x1,y1,x2-x1,y2-y1);
+  c.strokeStyle='#2563eb';c.setLineDash([4,4]);c.strokeRect(x1,y1,x2-x1,y2-y1);c.setLineDash([]);
+ }
+ // Physical radar location, at x=0/y=0.
+ c.fillStyle='#1e293b';c.beginPath();c.arc(xPixel(0),yPixel(0),7,0,Math.PI*2);c.fill();
+ c.fillStyle='#1e293b';c.textAlign='center';c.fillText('Radar',xPixel(0),plot.bottom+32);
+ if(!radarLive||!radarLive.healthy)return;
+ for(let i=0;i<radarLive.targets.length;i++){
+  const t=radarLive.targets[i];
+  if(!t.valid||!Number.isFinite(t.xMm)||!Number.isFinite(t.yMm))continue;
+  if(t.xMm< -6000||t.xMm>6000||t.yMm<0||t.yMm>6000)continue;
+  const x=xPixel(t.xMm),y=yPixel(t.yMm);
+  c.fillStyle=t.insideZone?'#15803d':'#ea580c';
+  c.beginPath();c.arc(x,y,9,0,Math.PI*2);c.fill();
+  c.strokeStyle='#fff';c.lineWidth=2;c.stroke();
+  c.fillStyle='#fff';c.font='bold 11px system-ui';c.textAlign='center';
+  c.fillText(String(i+1),x,y+4);
+  c.font='12px system-ui';
+ }
+}
+function updateRadarInfo(){
+ const el=document.getElementById('radarInfo');
+ if(!radarLive||!radarLive.healthy){
+  el.textContent='Radar LD2450 : liaison absente ou données expirées';return;
+ }
+ const targets=radarLive.targets.filter(t=>t.valid);
+ el.textContent=targets.length?
+  targets.map((t,i)=>'Cible '+(i+1)+' : X '+(t.xMm/1000).toFixed(2)+
+  ' m, Y '+(t.yMm/1000).toFixed(2)+' m, '+t.speedCmS+
+  ' cm/s — '+(t.insideZone?'dans la zone':'hors zone')).join(' | '):
+  'Liaison radar OK — aucune cible détectée';
+}
+function updateZoneView(){
+ radarCanvas.classList.toggle('draw',document.getElementById('zoneDraw').checked);
+ drawRadar();
+}
+for(const key of zoneFields){
+ document.getElementById(key).addEventListener('input',()=>{zoneDirty=true;updateZoneView();});
+}
+document.getElementById('zoneEnabled').addEventListener('change',()=>{zoneDirty=true;updateZoneView();});
+document.getElementById('zoneDraw').addEventListener('change',updateZoneView);
+radarCanvas.addEventListener('pointerdown',e=>{
+ if(!document.getElementById('zoneDraw').checked)return;
+ dragStart=canvasPoint(e);dragEnd=dragStart;
+ radarCanvas.setPointerCapture(e.pointerId);drawRadar();
+});
+radarCanvas.addEventListener('pointermove',e=>{
+ if(!dragStart)return;
+ dragEnd=canvasPoint(e);drawRadar();
+});
+radarCanvas.addEventListener('pointerup',e=>{
+ if(!dragStart)return;
+ dragEnd=canvasPoint(e);
+ const minX=Math.min(dragStart.x,dragEnd.x),maxX=Math.max(dragStart.x,dragEnd.x);
+ const minY=Math.min(dragStart.y,dragEnd.y),maxY=Math.max(dragStart.y,dragEnd.y);
+ if(maxX>minX&&maxY>minY){
+  for(const [k,v] of Object.entries({zoneMinX:minX,zoneMaxX:maxX,zoneMinY:minY,zoneMaxY:maxY}))
+   document.getElementById(k).value=v;
+  document.getElementById('zoneEnabled').checked=true;
+  zoneDirty=true;
+  document.getElementById('zoneMessage').textContent='Nouvelle zone dessinée : enregistrer pour appliquer.';
+ }
+ dragStart=null;dragEnd=null;drawRadar();
+});
+radarCanvas.addEventListener('pointercancel',()=>{dragStart=null;dragEnd=null;drawRadar();});
+async function pollRadar(){
+ if(radarPolling||document.getElementById('zoneSection').hidden)return;
+ radarPolling=true;
+ try{
+  const r=await fetch('/api/radar/live',{cache:'no-store'});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  radarLive=await r.json();
+ }catch(e){radarLive=null;}
+ finally{radarPolling=false;updateRadarInfo();drawRadar();}
+}
+setInterval(pollRadar,600);
+drawRadar();
 async function refresh(){
  try {
   const r=await fetch('/api/status');const d=await r.json();
@@ -429,14 +573,11 @@ async function refresh(){
   document.getElementById('scheduleText').textContent=d.scheduleOn?'ACTIF':'inactif';
  if(!radarFormDirty)document.getElementById('sensorType').value=d.sensorType;
  document.getElementById('zoneSection').hidden=document.getElementById('sensorType').value!=='ld2450';
- const zoneKeys=['zoneMinX','zoneMaxX','zoneMinY','zoneMaxY'];
- for(const key of zoneKeys) {
-   if(document.activeElement.id!==key)document.getElementById(key).value=d[key];
+ if(!zoneDirty){
+  for(const key of zoneFields)document.getElementById(key).value=d[key];
+  document.getElementById('zoneEnabled').checked=d.zoneEnabled;
  }
- document.getElementById('zoneEnabled').checked=d.zoneEnabled;
- document.getElementById('targetView').textContent=(d.targets||[])
-   .filter(t=>t.valid).map(t=>'X='+t.xMm+' mm, Y='+t.yMm+
-     ' mm, vitesse='+t.speedCmS+' cm/s, retenue='+t.insideZone).join(' | ')||'Aucune cible';
+ updateZoneView();
  if(!radarFormDirty) {
   document.getElementById('onDelay').value=d.onDelaySeconds;
   document.getElementById('offDelay').value=d.offDelayMinutes;
@@ -486,9 +627,14 @@ async function saveZone(e) {
  d.set('enabled',document.getElementById('zoneEnabled').checked?'true':'false');
  for(const key of ['zoneMinX','zoneMaxX','zoneMinY','zoneMaxY'])
    d.set(key,document.getElementById(key).value);
- const r=await fetch('/api/radar/zone',{method:'POST',body:d});
- if(!r.ok)alert('Zone non enregistrée : '+await r.text());
- await refresh();
+ const message=document.getElementById('zoneMessage');
+ try{
+  const r=await fetch('/api/radar/zone',{method:'POST',body:d});
+  if(!r.ok)throw Error(await r.text());
+  zoneDirty=false;
+  message.textContent='Zone enregistrée.';
+  await refresh();
+ }catch(error){message.textContent='Zone non enregistrée : '+error.message;}
 }
 async function saveOutput(e){
  e.preventDefault();
@@ -715,6 +861,29 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
     prefs.remove("radarOn");
     updateClockAndSchedule(); applyAutoLight();
     status();
+  });
+  // Lightweight telemetry endpoint for the interactive LD2450 map.
+  server.on("/api/radar/live", HTTP_GET, [](){
+    if(!authorize())return;
+    const bool enabled=sensorType==2;
+    const bool health=enabled&&radar2450.healthy();
+    String json="{\"healthy\":";
+    json+=health?"true":"false";
+    json+=",\"targets\":[";
+    for(size_t i=0;i<3;++i){
+      if(i)json+=",";
+      const auto &t=radar2450.target(i);
+      json+="{\"valid\":";
+      json+=(health&&t.valid)?"true":"false";
+      json+=",\"xMm\":"+String(t.xMm);
+      json+=",\"yMm\":"+String(t.yMm);
+      json+=",\"speedCmS\":"+String(t.speedCmS);
+      json+=",\"insideZone\":";
+      json+=(health&&radar2450.inside(t))?"true":"false";
+      json+="}";
+    }
+    json+="]}";
+    jsonHeader();server.send(200,"application/json",json);
   });
   server.on("/api/radar/zone", HTTP_POST, [](){
     if(!authorize())return;

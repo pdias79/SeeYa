@@ -34,6 +34,37 @@ bool otaOk = false;
 bool otaStarted = false;
 unsigned long lastWifiRetry = 0;
 
+uint32_t lastRadarLogMs = 0;
+void logRadarStatus() {
+  if(!sensorType) return;
+  const uint32_t now=millis();
+  if((uint32_t)(now-lastRadarLogMs)<2000) return;
+  lastRadarLogMs=now;
+  if(sensorType==1) {
+    Serial.printf("[LD2410C] t=%lu ms UART=%lu bytes frames=%lu link=%s state=%u presence=%s moving=%u cm (E=%u) stationary=%u cm (E=%u)\n",
+      (unsigned long)now, (unsigned long)radar.bytesReceived(),
+      (unsigned long)radar.frames(), radar.healthy()?"OK":"NO_VALID_FRAME",
+      (unsigned)radar.targetState(), radar.present()?"YES":"NO",
+      (unsigned)radar.movingDistanceCm(),(unsigned)radar.movingEnergy(),
+      (unsigned)radar.stationaryDistanceCm(),(unsigned)radar.stationaryEnergy());
+  } else if(sensorType==2) {
+    Serial.printf("[LD2450] t=%lu ms UART=%lu bytes frames=%lu link=%s targets=%u presence=%s zone=%s\n",
+      (unsigned long)now, (unsigned long)radar2450.bytesReceived(),
+      (unsigned long)radar2450.frames(), radar2450.healthy()?"OK":"NO_VALID_FRAME",
+      (unsigned)radar2450.count(),radar2450.present()?"YES":"NO",
+      radar2450.zone().enabled?"ON":"OFF");
+    if(radar2450.healthy()) {
+      for(size_t i=0;i<3;++i) {
+        const auto &t=radar2450.target(i);
+        if(!t.valid) continue;
+        Serial.printf("  target%u X=%d mm Y=%d mm speed=%d cm/s resolution=%u mm in_zone=%s\n",
+          (unsigned)(i+1),(int)t.xMm,(int)t.yMm,(int)t.speedCmS,
+          (unsigned)t.resolutionMm,radar2450.inside(t)?"YES":"NO");
+      }
+    }
+  }
+}
+
 const char *modeName() {
   switch (mode) {
     case Mode::ForceOn: return "FORCE_ON";
@@ -318,6 +349,8 @@ void setupRoutes() {
       else if(sensorType==2)radar2450.begin(radarUart,4,5);
       radarHold=false;
       previousPresence=false;
+      lastRadarLogMs=millis()-2000;
+      Serial.printf("[SeeYa] Radar selection: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
     }
     prefs.putUChar("sensorType",sensorType);
     prefs.remove("radarOn");
@@ -429,6 +462,8 @@ void setupRoutes() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("[SeeYa] Boot - USB serial monitor 115200 bauds");
+  Serial.println("[SeeYa] Radar UART1: ESP RX=GPIO4 (radar TX), ESP TX=GPIO5 (radar RX), 256000 bauds");
   prefs.begin("seeya", false);
   output.begin(prefs);
   offDelaySeconds=prefs.getUInt("offDelay",90);
@@ -444,6 +479,7 @@ void setup() {
   if(LD2450Presence::validZone(z))radar2450.setZone(z);
   if(sensorType==1)radar.begin(radarUart,4,5);
   else if(sensorType==2)radar2450.begin(radarUart,4,5);
+  Serial.printf("[SeeYa] Radar initial: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
   if (String(SEEYA_WIFI_SSID) == "CHANGE_ME_WIFI" ||
       String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
     Serial.println("ERROR: set WiFi and unique admin password in include/secrets.h");
@@ -471,6 +507,7 @@ void loop() {
   if(mode==Mode::Auto)output.request(radarHold);
   server.handleClient();
   output.update();
+  logRadarStatus();
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry > 15000) {
     lastWifiRetry = millis();
     WiFi.reconnect();

@@ -42,6 +42,9 @@ bool autoManualActive = false;
 bool autoManualOn = false;
 bool autoSnapshotRadar = false;
 bool autoSnapshotSchedule = false;
+// At boot the lighting must remain OFF until automation changes state
+// (or the user explicitly selects a command).
+bool bootOffPending = true;
 bool otaOk = false;
 bool otaStarted = false;
 
@@ -97,13 +100,21 @@ void updateClockAndSchedule() {
 bool autoLightRequested() { return radarHold || scheduleOn; }
 void applyAutoLight() {
   if(mode!=Mode::Auto)return;
+  if(bootOffPending) {
+    bootOffPending=false;
+    autoManualActive=true;
+    autoManualOn=false;
+    autoSnapshotRadar=radarHold;
+    autoSnapshotSchedule=scheduleOn;
+  }
   if(autoManualActive &&
      (radarHold!=autoSnapshotRadar || scheduleOn!=autoSnapshotSchedule))
     autoManualActive=false;
   output.request(autoManualActive?autoManualOn:autoLightRequested());
 }
-void resetAutoManual() { autoManualActive=false; }
+void resetAutoManual() { bootOffPending=false; autoManualActive=false; }
 void setAutoManual(bool on) {
+  bootOffPending=false;
   autoManualActive=true;
   autoManualOn=on;
   autoSnapshotRadar=radarHold;

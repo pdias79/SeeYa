@@ -251,7 +251,7 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 </form><div id="targetView">Aucune cible</div>
 </section>
 <section><h2>Programmation horaire (Europe/Paris)</h2>
-<p><small>Une plage par jour. Les plages qui dépassent minuit continuent le lendemain. En AUTO, le radar OU le programme peut allumer la sortie. Sans synchronisation NTP, aucun programme ne s'active.</small></p>
+<p><small>Deux plages par jour. Les plages qui dépassent minuit continuent le lendemain. En AUTO, le radar OU le programme peut allumer la sortie. Sans synchronisation NTP, aucun programme ne s'active.</small></p>
 <p>Horloge : <strong id="clockText">Synchronisation...</strong> — Programme : <strong id="scheduleText">inactif</strong></p>
 <form id="scheduleForm">
 <div id="scheduleDays"></div>
@@ -267,10 +267,12 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <script>
 const weekdays=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
 const scheduleDays=document.getElementById('scheduleDays');
-scheduleDays.innerHTML=weekdays.map((name,i)=>'<label>'+name+
- ' <input type="checkbox" id="schedEnabled'+i+'"> Actif'+
- ' <input type="time" id="schedStart'+i+'" value="18:00"> à '+
- ' <input type="time" id="schedEnd'+i+'" value="22:00"></label>').join('');
+scheduleDays.innerHTML=weekdays.map((name,i)=>'<fieldset><legend>'+name+'</legend>'+
+ [0,1].map(j=>'<label>Plage '+(j+1)+
+ ' <input type="checkbox" id="schedEnabled'+i+'_'+j+'"> Actif'+
+ ' <input type="time" id="schedStart'+i+'_'+j+'" value="'+(j?'12:00':'18:00')+'"> à '+
+ ' <input type="time" id="schedEnd'+i+'_'+j+'" value="'+(j?'13:00':'22:00')+'"></label>').join('')+
+ '</fieldset>').join('');
 function minutes(t) {
  if(!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(t))throw Error('Heure incorrecte : '+t);
  return Number(t.slice(0,2))*60+Number(t.slice(3));
@@ -280,10 +282,11 @@ async function loadSchedule() {
  const r=await fetch('/api/schedule',{cache:'no-store'});
  if(!r.ok)throw Error('HTTP '+r.status);
  const d=await r.json();
- for(let i=0;i<7;++i) {
-  document.getElementById('schedEnabled'+i).checked=d.days[i].enabled;
-  document.getElementById('schedStart'+i).value=hhmm(d.days[i].startMin);
-  document.getElementById('schedEnd'+i).value=hhmm(d.days[i].endMin);
+ for(let i=0;i<7;++i)for(let j=0;j<2;++j) {
+  const day=j===0?d.days[i]:d.secondSlots[i];
+  document.getElementById('schedEnabled'+i+'_'+j).checked=day.enabled;
+  document.getElementById('schedStart'+i+'_'+j).value=hhmm(day.startMin);
+  document.getElementById('schedEnd'+i+'_'+j).value=hhmm(day.endMin);
  }
 }
 document.getElementById('scheduleForm').addEventListener('submit',async e=>{
@@ -291,12 +294,13 @@ document.getElementById('scheduleForm').addEventListener('submit',async e=>{
  const message=document.getElementById('scheduleMessage');
  try {
   const data=new URLSearchParams();
-  for(let i=0;i<7;++i) {
-   const start=minutes(document.getElementById('schedStart'+i).value);
-   const end=minutes(document.getElementById('schedEnd'+i).value);
-   if(start===end)throw Error('Horaires identiques : '+weekdays[i]);
-   data.set('e'+i,document.getElementById('schedEnabled'+i).checked?'true':'false');
-   data.set('s'+i,String(start));data.set('f'+i,String(end));
+  for(let i=0;i<7;++i)for(let j=0;j<2;++j) {
+   const suffix=i+(j?'_2':'');
+   const start=minutes(document.getElementById('schedStart'+i+'_'+j).value);
+   const end=minutes(document.getElementById('schedEnd'+i+'_'+j).value);
+   if(start===end)throw Error('Horaires identiques : '+weekdays[i]+' plage '+(j+1));
+   data.set('e'+suffix,document.getElementById('schedEnabled'+i+'_'+j).checked?'true':'false');
+   data.set('s'+suffix,String(start));data.set('f'+suffix,String(end));
   }
   const r=await fetch('/api/schedule',{method:'POST',body:data});
   if(!r.ok)throw Error('HTTP '+r.status+' : '+await r.text());
@@ -414,39 +418,50 @@ void setupRoutes() {
       response += ",\"startMin\":" + String(d.startMin);
       response += ",\"endMin\":" + String(d.endMin) + "}";
     }
+    response += "],\"secondSlots\":[";
+    for(size_t i=0;i<7;++i) {
+      if(i)response+=",";
+      const auto &d=schedule.slot(i,1);
+      response += "{\"enabled\":";
+      response += d.enabled?"true":"false";
+      response += ",\"startMin\":" + String(d.startMin);
+      response += ",\"endMin\":" + String(d.endMin) + "}";
+    }
     response += "]}";
     jsonHeader();server.send(200,"application/json",response);
   });
   server.on("/api/schedule", HTTP_POST, []() {
     if(!authorize())return;
-    WeeklySchedule::Day proposed[7];
-    for(size_t i=0;i<7;++i) {
-      const String suffix=String(i);
-      String enabled=server.arg("e"+suffix);
-      if(enabled!="true"&&enabled!="false"){
+    WeeklySchedule::Day proposed[7][WeeklySchedule::SlotsPerDay];
+    for(size_t i=0;i<7;++i)for(size_t j=0;j<WeeklySchedule::SlotsPerDay;++j) {
+      const String suffix=String(i)+(j?"_2":"");
+      const String enable=server.arg("e"+suffix);
+      if(enable!="true"&&enable!="false") {
         server.send(400,"text/plain","Invalid enabled flag");return;
       }
-      proposed[i].enabled=enabled=="true";
+      auto &d=proposed[i][j];
+      d.enabled=enable=="true";
       const char *prefixes[2]={"s","f"};
-      uint16_t minutes[2]={};
-      for(int j=0;j<2;++j) {
-        const String value=server.arg(String(prefixes[j])+suffix);
-        if(value.isEmpty()||value.length()>4){
+      uint16_t mins[2]={};
+      for(int k=0;k<2;++k) {
+        const String value=server.arg(String(prefixes[k])+suffix);
+        if(value.isEmpty()||value.length()>4) {
           server.send(400,"text/plain","Invalid time");return;
         }
-        for(size_t k=0;k<value.length();++k)if(!isDigit(value[k])) {
+        for(size_t n=0;n<value.length();++n)if(!isDigit(value[n])){
           server.send(400,"text/plain","Invalid time");return;
         }
         long minute=value.toInt();
         if(minute<0||minute>=1440){server.send(400,"text/plain","Time out of range");return;}
-        minutes[j]=(uint16_t)minute;
+        mins[k]=(uint16_t)minute;
       }
-      proposed[i].startMin=minutes[0]; proposed[i].endMin=minutes[1];
-      if(!WeeklySchedule::valid(proposed[i])){
+      d.startMin=mins[0];d.endMin=mins[1];
+      if(!WeeklySchedule::valid(d)){
         server.send(400,"text/plain","Invalid interval");return;
       }
     }
-    for(size_t i=0;i<7;++i)schedule.setDay(i,proposed[i]);
+    for(size_t i=0;i<7;++i)for(size_t j=0;j<WeeklySchedule::SlotsPerDay;++j)
+      schedule.setSlot(i,j,proposed[i][j]);
     schedule.save();
     updateClockAndSchedule();
     if(mode==Mode::Auto)output.request(autoLightRequested());

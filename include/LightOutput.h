@@ -35,6 +35,8 @@ private:
   Preferences *prefs_ = nullptr;
   Config cfg_;
   bool requested_ = false;
+  bool ledStateKnown_ = false;
+  bool ledState_ = false;
   bool pending_ = false;
   uint8_t retries_ = 0;
   unsigned long nextTry_ = 0;
@@ -42,6 +44,7 @@ private:
   void releaseGpio();
   void driveGpio(bool on);
   void driveLed(bool on);
+  void updateLedStatus();
   void save();
   bool sendHttp(bool on);
   static bool validGpio(uint8_t gpio);

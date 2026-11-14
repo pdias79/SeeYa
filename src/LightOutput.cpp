@@ -22,14 +22,24 @@ const char *LightOutput::resultName(Result r) {
   }
 }
 void LightOutput::driveLed(bool on) {
-  // The blue LED on many, but not all, SuperMini boards is active LOW on GPIO8.
-  // GPIO8 is a strapping pin: never attach an external load to it.
+  // GPIO8 on ESP32-C3 SuperMini is often active LOW.
   if (!cfg_.ledEnabled) {
-    pinMode(LED_GPIO, INPUT);
+    if (ledStateKnown_) pinMode(LED_GPIO, INPUT);
+    ledStateKnown_=false;
     return;
   }
+  if (ledStateKnown_ && ledState_==on) return;
   digitalWrite(LED_GPIO, (on == cfg_.ledActiveHigh) ? HIGH : LOW);
   pinMode(LED_GPIO, OUTPUT);
+  ledState_=on;
+  ledStateKnown_=true;
+}
+void LightOutput::updateLedStatus() {
+  // 250 ms ON / 750 ms OFF whenever the domestic STA is disconnected.
+  // Visual status only: never changes the real lighting output.
+  const bool on = WiFi.status()==WL_CONNECTED
+      ? requested_ : ((millis()%1000UL)<250UL);
+  driveLed(on);
 }
 void LightOutput::releaseGpio() {
   if (cfg_.type == Type::Gpio) {
@@ -58,6 +68,7 @@ void LightOutput::begin(Preferences &prefs) {
   if (cfg_.type == Type::Gpio && !validGpio(cfg_.gpio))
     cfg_.type = Type::Disabled;
   driveGpio(false);
+  ledStateKnown_=false;
   driveLed(false);
 }
 void LightOutput::save() {
@@ -92,6 +103,7 @@ bool LightOutput::configure(const Config &candidate, String &error) {
   retries_ = 0;
   result_ = Result::Unknown;
   driveGpio(false);
+  ledStateKnown_=false;
   driveLed(false);
   save();
   return true;
@@ -99,7 +111,7 @@ bool LightOutput::configure(const Config &candidate, String &error) {
 void LightOutput::request(bool on) {
   if (requested_ == on) return;
   requested_ = on;
-  driveLed(on);
+  updateLedStatus();
   if (cfg_.type == Type::Gpio) {
     driveGpio(on);
     result_ = Result::AppliedLocal;
@@ -124,6 +136,7 @@ bool LightOutput::sendHttp(bool on) {
   return code >= 200 && code < 300;
 }
 void LightOutput::update() {
+  updateLedStatus();
   if (cfg_.type != Type::Http || !pending_) return;
   if (static_cast<int32_t>(millis() - nextTry_) < 0) return;
   if (WiFi.status() != WL_CONNECTED) {

@@ -105,11 +105,12 @@ section{padding:16px;border:1px solid #ddd;border-radius:10px;margin:16px 0}
 label{display:block;margin-top:12px}input[type=url]{width:95%}
 small{color:#666}pre{white-space:pre-wrap;word-break:break-word}
 </style></head><body><h1>SeeYa</h1>
-<p>ESP32-C3 — version de développement 0.2</p>
+<p>ESP32-C3 — firmware <span id="firmwareVersion">…</span></p>
 <section><h2>Éclairage</h2><pre id="status">Chargement…</pre>
-<button onclick="command('on')">Allumer</button>
-<button onclick="command('off')">Éteindre</button>
-<button onclick="command('auto')">Auto</button></section>
+<button type="button" id="lightOn">Allumer</button>
+<button type="button" id="lightOff">Éteindre</button>
+<button type="button" id="lightAuto">Auto</button>
+<p id="lightMessage" role="status" aria-live="polite"></p></section>
 <section><h2>Sortie d'éclairage</h2>
 <form onsubmit="saveOutput(event)">
 <label>Mode de sortie <select id="type">
@@ -150,13 +151,28 @@ async function refresh(){
  try {
   const r=await fetch('/api/status');const d=await r.json();
   document.getElementById('status').textContent=JSON.stringify(d,null,2);
+  document.getElementById('firmwareVersion').textContent=d.version;
  document.getElementById('radarEnabled').checked=!!d.radarEnabled;
  if(document.activeElement.id!=='offDelay')document.getElementById('offDelay').value=d.offDelaySeconds;
  }catch(e){document.getElementById('status').textContent='ESP indisponible';}
 }
-async function command(action){
- await fetch('/api/light/'+action,{method:'POST'});await refresh();
+async function sendLightCommand(action) {
+ const message=document.getElementById('lightMessage');
+ message.textContent='Envoi de la commande '+action+'…';
+ try {
+  const response=await fetch('/api/light/'+action,{method:'POST',cache:'no-store'});
+  if(!response.ok)throw new Error('HTTP '+response.status+' : '+await response.text());
+  const result=await response.json();
+  message.textContent='Commande acceptée — '+result.mode;
+  await refresh();
+ } catch(error) {
+  message.textContent='Commande impossible : '+error.message;
+  console.error('SeeYa light command failed',error);
+ }
 }
+document.getElementById('lightOn').addEventListener('click',()=>sendLightCommand('on'));
+document.getElementById('lightOff').addEventListener('click',()=>sendLightCommand('off'));
+document.getElementById('lightAuto').addEventListener('click',()=>sendLightCommand('auto'));
 async function loadConfig(){
  const r=await fetch('/api/output');const d=await r.json();
  for(const key of ['type','gpio','activeHigh','ledActiveHigh','urlOn','urlOff','httpMethod']){

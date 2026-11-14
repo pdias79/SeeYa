@@ -4,6 +4,7 @@
 #include <Update.h>
 #include <Preferences.h>
 #include "LightOutput.h"
+#include "RadarPresence.h"
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -17,6 +18,12 @@ namespace {
 WebServer server(80);
 Preferences prefs;
 LightOutput output;
+HardwareSerial radarUart(1);
+RadarPresence radar;
+bool radarEnabled = false;
+uint32_t offDelaySeconds = 90;
+bool radarHold = false;
+uint32_t lastPresenceMs = 0;
 enum class Mode { Auto, ForceOn, ForceOff };
 Mode mode = Mode::Auto;
 bool otaOk = false;
@@ -47,6 +54,22 @@ void status() {
   json += modeName();
   json += "\",\"requestedOn\":";
   json += output.requested() ? "true" : "false";
+  json += ",\"radarEnabled\":";
+  json += radarEnabled ? "true" : "false";
+  json += ",\"radarHealthy\":";
+  json += radarEnabled && radar.healthy() ? "true" : "false";
+  json += ",\"presence\":";
+  json += radarEnabled && radar.present() ? "true" : "false";
+  json += ",\"radarHold\":";
+  json += radarHold ? "true" : "false";
+  json += ",\"offDelaySeconds\":";
+  json += String(offDelaySeconds);
+  json += ",\"movingDistanceCm\":";
+  json += String(radar.movingDistanceCm());
+  json += ",\"stationaryDistanceCm\":";
+  json += String(radar.stationaryDistanceCm());
+  json += ",\"radarFrames\":";
+  json += String(radar.frames());
   json += ",\"outputType\":\"";
   json += LightOutput::typeName(c.type);
   json += "\",\"outputResult\":\"";
@@ -110,6 +133,13 @@ small{color:#666}pre{white-space:pre-wrap;word-break:break-word}
 <p><small>Lors du changement de configuration, la sortie locale est remise à OFF.
 Le protocole HTTP est limité à des URL http:// dans cette version expérimentale.</small></p>
 </form></section>
+<section><h2>LD2410C</h2>
+<form onsubmit="saveRadar(event)">
+<label><input type="checkbox" id="radarEnabled"> Activer le radar LD2410C</label>
+<label>Délai extinction (secondes) <input id="offDelay" type="number" min="1" max="86400" value="90"></label>
+<button type="submit">Enregistrer</button>
+</form><small>UART 256000 bauds : TX radar vers GPIO4, RX radar vers GPIO5. Mode LD2450 non encore disponible.</small>
+</section>
 <section><h2>Firmware OTA</h2>
 <form action="/update" method="post" enctype="multipart/form-data">
 <input type="file" name="firmware" accept=".bin" required>
@@ -120,6 +150,8 @@ async function refresh(){
  try {
   const r=await fetch('/api/status');const d=await r.json();
   document.getElementById('status').textContent=JSON.stringify(d,null,2);
+ document.getElementById('radarEnabled').checked=!!d.radarEnabled;
+ if(document.activeElement.id!=='offDelay')document.getElementById('offDelay').value=d.offDelaySeconds;
  }catch(e){document.getElementById('status').textContent='ESP indisponible';}
 }
 async function command(action){
@@ -131,6 +163,15 @@ async function loadConfig(){
   if(d[key]!==undefined)document.getElementById(key).value=String(d[key]);
  }
  document.getElementById('ledEnabled').checked=!!d.ledEnabled;
+}
+async function saveRadar(e) {
+ e.preventDefault();
+ const d=new URLSearchParams();
+ d.set('enabled',document.getElementById('radarEnabled').checked?'true':'false');
+ d.set('offDelay',document.getElementById('offDelay').value);
+ const r=await fetch('/api/radar',{method:'POST',body:d});
+ if(!r.ok)alert(await r.text());
+ refresh();
 }
 async function saveOutput(e){
  e.preventDefault();
@@ -161,7 +202,31 @@ void setupRoutes() {
   });
   server.on("/api/light/auto", HTTP_POST, []() {
     if (!authorize()) return;
-    mode = Mode::Auto; output.request(false); status(); // no radar/schedule yet
+    mode = Mode::Auto; output.request(radarHold); status(); // schedules pending
+  });
+  server.on("/api/radar", HTTP_POST, []() {
+    if (!authorize()) return;
+    String seconds = server.arg("offDelay");
+    if (seconds.isEmpty() || seconds.length() > 5) {
+      server.send(400, "text/plain", "Invalid delay"); return;
+    }
+    for (size_t i=0;i<seconds.length();++i) {
+      if (!isDigit(seconds[i])) { server.send(400,"text/plain","Expected integer");return; }
+    }
+    uint32_t value=seconds.toInt();
+    if(value<1 || value>86400) {
+      server.send(400,"text/plain","Delay out of range");return;
+    }
+    bool enable=server.arg("enabled")=="true";
+    offDelaySeconds=value;
+    prefs.putUInt("offDelay",offDelaySeconds);
+    prefs.putBool("radarOn",enable);
+    if(enable && !radarEnabled) radar.begin(radarUart,4,5);
+    if(!enable && radarEnabled) radarUart.end();
+    radarEnabled=enable;
+    radarHold=false;
+    if(mode==Mode::Auto) output.request(false);
+    status();
   });
   server.on("/api/output", HTTP_GET, []() {
     if (!authorize()) return;
@@ -243,6 +308,10 @@ void setup() {
   Serial.begin(115200);
   prefs.begin("seeya", false);
   output.begin(prefs);
+  offDelaySeconds=prefs.getUInt("offDelay",90);
+  if(offDelaySeconds<1 || offDelaySeconds>86400)offDelaySeconds=90;
+  radarEnabled=prefs.getBool("radarOn",false);
+  if(radarEnabled)radar.begin(radarUart,4,5);
   if (String(SEEYA_WIFI_SSID) == "CHANGE_ME_WIFI" ||
       String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD" ||
       strlen(SEEYA_ADMIN_PASSWORD) < 12) {
@@ -255,6 +324,18 @@ void setup() {
   setupRoutes();
 }
 void loop() {
+  if(radarEnabled) {
+    radar.update();
+    uint32_t now=millis();
+    if(radar.present()) {
+      lastPresenceMs=now;
+      radarHold=true;
+    } else if(radarHold && (uint32_t)(now-lastPresenceMs)>=offDelaySeconds*1000UL) {
+      radarHold=false;
+    }
+    // The holding timer still expires after loss of radar communication.
+  } else radarHold=false;
+  if(mode==Mode::Auto)output.request(radarHold);
   server.handleClient();
   output.update();
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry > 15000) {

@@ -108,7 +108,10 @@ bool portalClient() {
 void redirectToSetup() {
   server.sendHeader("Location","http://192.168.4.1/setup",true);
   server.sendHeader("Cache-Control","no-store");
-  server.send(302,"text/plain","");
+  server.send(302,"text/html; charset=utf-8",
+    "<!doctype html><html><head><meta http-equiv='refresh' "
+    "content='0;url=http://192.168.4.1/setup'></head><body>"
+    "<a href='http://192.168.4.1/setup'>Configurer SeeYa</a></body></html>");
 }
 bool authorize() {
   if (server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return true;

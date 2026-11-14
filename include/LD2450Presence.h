@@ -25,6 +25,7 @@ public:
   bool present() const;
   uint8_t count() const;
   uint32_t frames() const { return frames_; }
+  uint32_t bytesReceived() const { return bytesReceived_; }
   const Target &target(size_t n) const { return targets_[n]; } // n=0..2
   void setZone(const Zone &zone) { zone_ = zone; }
   Zone zone() const { return zone_; }
@@ -39,6 +40,7 @@ private:
   Target targets_[3] = {};
   Zone zone_;
   bool everReceived_ = false;
+  uint32_t bytesReceived_ = 0;
   uint32_t lastFrameMs_ = 0, frames_ = 0;
   void consume(uint8_t byte);
 };

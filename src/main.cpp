@@ -7,6 +7,7 @@
 #include "RadarPresence.h"
 #include "LD2450Presence.h"
 #include "WeeklySchedule.h"
+#include "WifiFallback.h"
 #include <time.h>
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -25,6 +26,7 @@ HardwareSerial radarUart(1);
 RadarPresence radar;
 LD2450Presence radar2450;
 WeeklySchedule schedule;
+WifiFallback wifiFallback;
 // 0 = disabled; 1 = LD2410C; 2 = LD2450
 uint8_t sensorType = 0;
 uint32_t offDelaySeconds = 90;
@@ -38,7 +40,7 @@ enum class Mode { Auto, ForceOn, ForceOff };
 Mode mode = Mode::Auto;
 bool otaOk = false;
 bool otaStarted = false;
-unsigned long lastWifiRetry = 0;
+
 
 uint32_t lastRadarLogMs = 0;
 void logRadarStatus() {
@@ -86,7 +88,7 @@ void updateClockAndSchedule() {
     return;
   }
   strftime(localTimeText,sizeof(localTimeText),"%Y-%m-%d %H:%M:%S",&local);
-  scheduleOn=schedule.active(local);
+  scheduleOn=schedule.requestedOn(local);
 }
 bool autoLightRequested() { return radarHold || scheduleOn; }
 const char *modeName() {
@@ -119,6 +121,11 @@ void status() {
   json += localTimeText;
   json += "\",\"scheduleOn\":";
   json += scheduleOn ? "true":"false";
+  json += ",\"wifiFallback\":";
+  json += wifiFallback.accessPointActive()?"true":"false";
+  json += ",\"fallbackSsid\":\"";
+  json += wifiFallback.apName();
+  json += "\"";
   const bool is2410=sensorType==1;
   const bool is2450=sensorType==2;
   const bool health=is2410?radar.healthy():(is2450&&radar2450.healthy());
@@ -250,14 +257,21 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <button type="submit">Enregistrer la zone</button>
 </form><div id="targetView">Aucune cible</div>
 </section>
-<section><h2>Programmation horaire (Europe/Paris)</h2>
-<p><small>Une plage par jour. Les plages qui dépassent minuit continuent le lendemain. En AUTO, le radar OU le programme peut allumer la sortie. Sans synchronisation NTP, aucun programme ne s'active.</small></p>
+<section><h2>Programmation hebdomadaire — 10 événements</h2>
+<p><small>Chaque événement définit ON, OFF ou Désactivé, une heure et des jours (L M M J V S D). Le dernier événement applicable détermine l'état du programme. Le radar peut toujours allumer en AUTO, même après un événement OFF.</small></p>
 <p>Horloge : <strong id="clockText">Synchronisation...</strong> — Programme : <strong id="scheduleText">inactif</strong></p>
-<form id="scheduleForm">
-<div id="scheduleDays"></div>
-<button type="submit">Enregistrer le programme</button>
-</form>
+<form id="scheduleForm"><div id="scheduleEvents"></div>
+<button type="submit">Enregistrer les 10 événements</button></form>
 <p id="scheduleMessage" role="status" aria-live="polite"></p>
+</section>
+<section><h2>Configuration Wi-Fi</h2>
+<p><small>Si le réseau domestique est indisponible, SeeYa crée son réseau Wi-Fi de secours. Portail captif à http://192.168.4.1.</small></p>
+<form id="wifiForm">
+<label>SSID du réseau domestique <input id="wifiSsid" maxlength="32" required></label>
+<label>Mot de passe du réseau domestique <input id="wifiPass" type="password" maxlength="63" placeholder="Laisser vide pour conserver l'actuel"></label>
+<label>Nom du Wi-Fi de secours <input id="fallbackSsid" maxlength="32" required></label>
+<button type="submit">Enregistrer le Wi-Fi</button></form>
+<p id="wifiMessage" role="status" aria-live="polite"></p>
 </section>
 <section><h2>Firmware OTA</h2>
 <form action="/update" method="post" enctype="multipart/form-data">
@@ -265,46 +279,72 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <button type="submit">Installer firmware.bin</button></form>
 <p><small>Ne pas couper l'alimentation durant le transfert.</small></p></section>
 <script>
-const weekdays=['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
-const scheduleDays=document.getElementById('scheduleDays');
-scheduleDays.innerHTML=weekdays.map((name,i)=>'<label>'+name+
- ' <input type="checkbox" id="schedEnabled'+i+'"> Actif'+
- ' <input type="time" id="schedStart'+i+'" value="18:00"> à '+
- ' <input type="time" id="schedEnd'+i+'" value="22:00"></label>').join('');
+const weekdays=['L','M','M','J','V','S','D'];
+const scheduleEvents=document.getElementById('scheduleEvents');
+scheduleEvents.innerHTML=Array.from({length:10},(_,i)=>
+ '<fieldset><legend>Événement '+(i+1)+'</legend>'+
+ '<label>Action <select id="evAction'+i+'"><option value="0">Désactivé</option>'+
+ '<option value="1">Allumer</option><option value="2">Éteindre</option></select></label>'+
+ '<label>Heure <input type="time" id="evTime'+i+'" value="18:00"></label>'+
+ '<div>Jours : '+weekdays.map((day,j)=>
+ '<label style="display:inline-block;margin-right:10px"><input type="checkbox" id="evDay'+i+'_'+j+'"> '+day+'</label>').join('')+'</div></fieldset>').join('');
 function minutes(t) {
  if(!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(t))throw Error('Heure incorrecte : '+t);
  return Number(t.slice(0,2))*60+Number(t.slice(3));
 }
-function hhmm(min) {return String(Math.floor(min/60)).padStart(2,'0')+':'+String(min%60).padStart(2,'0');}
-async function loadSchedule() {
+function hhmm(min){return String(Math.floor(min/60)).padStart(2,'0')+':'+String(min%60).padStart(2,'0');}
+async function loadSchedule(){
  const r=await fetch('/api/schedule',{cache:'no-store'});
  if(!r.ok)throw Error('HTTP '+r.status);
  const d=await r.json();
- for(let i=0;i<7;++i) {
-  document.getElementById('schedEnabled'+i).checked=d.days[i].enabled;
-  document.getElementById('schedStart'+i).value=hhmm(d.days[i].startMin);
-  document.getElementById('schedEnd'+i).value=hhmm(d.days[i].endMin);
+ for(let i=0;i<10;++i){
+  const ev=d.events[i];
+  document.getElementById('evAction'+i).value=ev.action;
+  document.getElementById('evTime'+i).value=hhmm(ev.minute);
+  for(let j=0;j<7;++j)
+   document.getElementById('evDay'+i+'_'+j).checked=!!(ev.days&(1<<j));
  }
 }
 document.getElementById('scheduleForm').addEventListener('submit',async e=>{
- e.preventDefault();
- const message=document.getElementById('scheduleMessage');
- try {
+ e.preventDefault();const message=document.getElementById('scheduleMessage');
+ try{
   const data=new URLSearchParams();
-  for(let i=0;i<7;++i) {
-   const start=minutes(document.getElementById('schedStart'+i).value);
-   const end=minutes(document.getElementById('schedEnd'+i).value);
-   if(start===end)throw Error('Horaires identiques : '+weekdays[i]);
-   data.set('e'+i,document.getElementById('schedEnabled'+i).checked?'true':'false');
-   data.set('s'+i,String(start));data.set('f'+i,String(end));
+  for(let i=0;i<10;++i){
+   let days=0;
+   for(let j=0;j<7;++j)if(document.getElementById('evDay'+i+'_'+j).checked)days|=1<<j;
+   data.set('a'+i,document.getElementById('evAction'+i).value);
+   data.set('m'+i,String(minutes(document.getElementById('evTime'+i).value)));
+   data.set('d'+i,String(days));
   }
   const r=await fetch('/api/schedule',{method:'POST',body:data});
-  if(!r.ok)throw Error('HTTP '+r.status+' : '+await r.text());
-  message.textContent='Programme enregistré';
-  await refresh();
+  if(!r.ok)throw Error('HTTP '+r.status+' '+await r.text());
+  message.textContent='Événements enregistrés';await refresh();
  }catch(error){message.textContent='Erreur : '+error.message;}
 });
-loadSchedule().catch(error=>{document.getElementById('scheduleMessage').textContent=error.message;});
+async function loadWifi(){
+ const r=await fetch('/api/wifi',{cache:'no-store'});
+ if(!r.ok)throw Error('HTTP '+r.status);
+ const d=await r.json();
+ document.getElementById('wifiSsid').value=d.ssid;
+ document.getElementById('fallbackSsid').value=d.fallbackSsid;
+}
+document.getElementById('wifiForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const data=new URLSearchParams();
+ data.set('ssid',document.getElementById('wifiSsid').value);
+ data.set('password',document.getElementById('wifiPass').value);
+ data.set('keepPassword',document.getElementById('wifiPass').value===''?'true':'false');
+ data.set('fallbackSsid',document.getElementById('fallbackSsid').value);
+ const message=document.getElementById('wifiMessage');
+ try {
+  const r=await fetch('/api/wifi',{method:'POST',body:data});
+  if(!r.ok)throw Error('HTTP '+r.status+' '+await r.text());
+  message.textContent='Configuration enregistrée. Reconnexion Wi-Fi en cours.';
+  document.getElementById('wifiPass').value='';
+ }catch(error){message.textContent='Erreur : '+error.message;}
+});
+loadSchedule().catch(e=>document.getElementById('scheduleMessage').textContent=e.message);
+loadWifi().catch(e=>document.getElementById('wifiMessage').textContent=e.message);
 let radarFormDirty=false;
 document.getElementById('sensorType').addEventListener('change',()=>{radarFormDirty=true;});
 document.getElementById('offDelay').addEventListener('input',()=>{radarFormDirty=true;});
@@ -403,52 +443,43 @@ void setupRoutes() {
     if (!authorize()) return;
     mode = Mode::Auto; updateClockAndSchedule(); output.request(autoLightRequested()); status();
   });
-  server.on("/api/schedule", HTTP_GET, []() {
+  server.on("/api/schedule", HTTP_GET, [](){
     if(!authorize())return;
-    String response="{\"days\":[";
-    for(size_t i=0;i<7;++i) {
+    String response="{\"events\":[";
+    for(size_t i=0;i<WeeklySchedule::SlotCount;++i){
       if(i)response+=",";
-      const auto &d=schedule.day(i);
-      response += "{\"enabled\":";
-      response += d.enabled?"true":"false";
-      response += ",\"startMin\":" + String(d.startMin);
-      response += ",\"endMin\":" + String(d.endMin) + "}";
+      const auto &s=schedule.slot(i);
+      response += "{\"action\":" + String((unsigned)s.action);
+      response += ",\"minute\":" + String(s.minute);
+      response += ",\"days\":" + String(s.days) + "}";
     }
     response += "]}";
     jsonHeader();server.send(200,"application/json",response);
   });
-  server.on("/api/schedule", HTTP_POST, []() {
+  server.on("/api/schedule", HTTP_POST, [](){
     if(!authorize())return;
-    WeeklySchedule::Day proposed[7];
-    for(size_t i=0;i<7;++i) {
+    WeeklySchedule::Slot proposed[WeeklySchedule::SlotCount];
+    for(size_t i=0;i<WeeklySchedule::SlotCount;++i){
       const String suffix=String(i);
-      String enabled=server.arg("e"+suffix);
-      if(enabled!="true"&&enabled!="false"){
-        server.send(400,"text/plain","Invalid enabled flag");return;
-      }
-      proposed[i].enabled=enabled=="true";
-      const char *prefixes[2]={"s","f"};
-      uint16_t minutes[2]={};
-      for(int j=0;j<2;++j) {
-        const String value=server.arg(String(prefixes[j])+suffix);
-        if(value.isEmpty()||value.length()>4){
-          server.send(400,"text/plain","Invalid time");return;
+      const char *prefixes[3]={"a","m","d"};
+      int values[3]={};
+      for(int k=0;k<3;++k) {
+        const String v=server.arg(String(prefixes[k])+suffix);
+        if(v.isEmpty()||v.length()>4){server.send(400,"text/plain","Invalid event");return;}
+        for(size_t n=0;n<v.length();++n)if(!isDigit(v[n])){
+          server.send(400,"text/plain","Invalid event");return;
         }
-        for(size_t k=0;k<value.length();++k)if(!isDigit(value[k])) {
-          server.send(400,"text/plain","Invalid time");return;
-        }
-        long minute=value.toInt();
-        if(minute<0||minute>=1440){server.send(400,"text/plain","Time out of range");return;}
-        minutes[j]=(uint16_t)minute;
+        values[k]=v.toInt();
       }
-      proposed[i].startMin=minutes[0]; proposed[i].endMin=minutes[1];
-      if(!WeeklySchedule::valid(proposed[i])){
-        server.send(400,"text/plain","Invalid interval");return;
+      proposed[i].action=static_cast<WeeklySchedule::Action>(values[0]);
+      proposed[i].minute=values[1];
+      proposed[i].days=values[2];
+      if(values[0]>2||values[1]>=1440||values[2]>127||!WeeklySchedule::valid(proposed[i])){
+        server.send(400,"text/plain","Invalid event range");return;
       }
     }
-    for(size_t i=0;i<7;++i)schedule.setDay(i,proposed[i]);
-    schedule.save();
-    updateClockAndSchedule();
+    for(size_t i=0;i<WeeklySchedule::SlotCount;++i)schedule.setSlot(i,proposed[i]);
+    schedule.save();updateClockAndSchedule();
     if(mode==Mode::Auto)output.request(autoLightRequested());
     server.send(200,"application/json","{\"saved\":true}");
   });

@@ -98,6 +98,18 @@ const char *modeName() {
     default: return "AUTO";
   }
 }
+bool portalClient() {
+  // Setup without HTTP Basic only from the temporary AP subnet.
+  return wifiFallback.accessPointActive() &&
+    (server.client().remoteIP()[0]==192 &&
+     server.client().remoteIP()[1]==168 &&
+     server.client().remoteIP()[2]==4);
+}
+void redirectToSetup() {
+  server.sendHeader("Location","http://192.168.4.1/setup",true);
+  server.sendHeader("Cache-Control","no-store");
+  server.send(302,"text/plain","");
+}
 bool authorize() {
   if (server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return true;
   server.requestAuthentication(BASIC_AUTH, "SeeYa");
@@ -427,8 +439,98 @@ loadConfig();refresh();setInterval(refresh,3000);
 )HTML";
 void setupRoutes() {
   server.on("/", HTTP_GET, []() {
+    if(portalClient()){redirectToSetup();return;}
     if (!authorize()) return;
     server.send_P(200, "text/html; charset=utf-8", HOME);
+  });
+  // Captive portal detection on Android, iOS and Windows. All paths redirect
+  // only while serving the temporary access point, not on the home network.
+  const char *probePaths[]={"/generate_204","/gen_204","/hotspot-detect.html",
+    "/library/test/success.html","/connecttest.txt","/ncsi.txt","/redirect"};
+  for(const char *path:probePaths) {
+    server.on(path, HTTP_GET, [](){
+      if(portalClient())redirectToSetup();
+      else server.send(204,"text/plain","");
+    });
+  }
+  server.on("/setup", HTTP_GET, [](){
+    if(!portalClient() && !authorize())return;
+    server.send(200,"text/html; charset=utf-8",R"PORTAL(
+<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SeeYa - Configuration Wi-Fi</title>
+<style>body{font:16px system-ui;max-width:440px;margin:24px auto;padding:16px}
+label{display:block;margin:14px 0}input{padding:9px;width:95%}
+button{padding:12px}small{color:#555}</style></head>
+<body><h1>SeeYa — Configuration Wi-Fi</h1>
+<p>Renseigner le réseau domestique. Une fois connecté, le réseau SeeYa de secours disparaîtra.</p>
+<form id="setupForm">
+<label>SSID domestique <input id="ssid" required maxlength="32"></label>
+<label>Mot de passe Wi-Fi <input id="password" type="password" maxlength="63"></label>
+<label>SSID du réseau de secours <input id="ap" required maxlength="32"></label>
+<button type="submit">Enregistrer</button></form>
+<p id="message" role="status"></p>
+<small>Si le navigateur ne s'ouvre pas automatiquement, aller sur http://192.168.4.1/setup.</small>
+<script>
+fetch('/api/wifi').then(r=>r.json()).then(d=>{
+ document.getElementById('ssid').value=d.ssid;
+ document.getElementById('ap').value=d.fallbackSsid;
+}).catch(()=>{});
+document.getElementById('setupForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const d=new URLSearchParams();
+ d.set('ssid',document.getElementById('ssid').value);
+ d.set('password',document.getElementById('password').value);
+ d.set('keepPassword','false');
+ d.set('fallbackSsid',document.getElementById('ap').value);
+ const message=document.getElementById('message');
+ try{
+  const r=await fetch('/api/wifi',{method:'POST',body:d});
+  if(!r.ok)throw Error(await r.text());
+  message.textContent='Enregistré. Connexion au réseau domestique en cours. Le réseau de secours se fermera automatiquement.';
+ }catch(error){message.textContent='Erreur : '+error.message;}
+});
+</script></body></html>
+)PORTAL");
+  });
+  server.on("/api/wifi", HTTP_GET, [](){
+    if(!portalClient() && !authorize())return;
+    // Do not return the saved Wi-Fi password.
+    String response="{\"ssid\":\"";
+    // Reject quotes and control characters in SSIDs to keep JSON simple.
+    const String ssid=wifiFallback.ssid();
+    for(size_t i=0;i<ssid.length();++i){
+      if(ssid[i]=='"'||ssid[i]=='\\')response+='\\';
+      if((uint8_t)ssid[i]>=32)response+=ssid[i];
+    }
+    response += "\",\"fallbackSsid\":\"";
+    const String ap=wifiFallback.apName();
+    for(size_t i=0;i<ap.length();++i){
+      if(ap[i]=='"'||ap[i]=='\\')response+='\\';
+      if((uint8_t)ap[i]>=32)response+=ap[i];
+    }
+    response += "\"}";
+    jsonHeader();server.send(200,"application/json",response);
+  });
+  server.on("/api/wifi", HTTP_POST, [](){
+    if(!portalClient() && !authorize())return;
+    const String ssid=server.arg("ssid");
+    String password=server.arg("password");
+    const String ap=server.arg("fallbackSsid");
+    if(server.arg("keepPassword")=="true" && password.isEmpty() &&
+       ssid==wifiFallback.ssid()) {
+      // Keep current secret without exposing it to clients: handled by manager.
+      password=String("\x01"); // sentinel, resolved below
+    }
+    if(!WifiFallback::validApName(ap) ||
+       ssid.length()==0 || ssid.length()>32 || password.length()>63){
+      server.send(400,"text/plain","Invalid Wi-Fi settings");return;
+    }
+    // Replace a blank password only when explicitly submitted.
+    const bool keep=password==String("\x01");
+    jsonHeader();server.send(200,"application/json","{\"saved\":true}");
+    server.client().flush();
+    wifiFallback.configure(ssid,keep?wifiFallback.password():password,ap);
   });
   server.on("/api/status", HTTP_GET, status);
   server.on("/api/light/on", HTTP_POST, []() {
@@ -614,6 +716,7 @@ void setupRoutes() {
       }
     });
   server.onNotFound([]() {
+    if(portalClient()){redirectToSetup();return;}
     if (!authorize()) return;
     server.send(404, "text/plain", "Not found");
   });
@@ -642,14 +745,12 @@ void setup() {
   if(sensorType==1)radar.begin(radarUart,4,5);
   else if(sensorType==2)radar2450.begin(radarUart,4,5);
   Serial.printf("[SeeYa] Radar initial: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
-  if (String(SEEYA_WIFI_SSID) == "CHANGE_ME_WIFI" ||
-      String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
+  if (String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
     Serial.println("ERROR: set WiFi and unique admin password in include/secrets.h");
     return;
   }
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(SEEYA_WIFI_SSID, SEEYA_WIFI_PASSWORD);
+  const char *initialSsid=String(SEEYA_WIFI_SSID)=="CHANGE_ME_WIFI"?"":SEEYA_WIFI_SSID;
+  wifiFallback.begin(prefs,initialSsid,SEEYA_WIFI_PASSWORD);
   // French civil time with automatic CET/CEST daylight-saving transitions.
   configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3","pool.ntp.org","time.google.com");
   setupRoutes();
@@ -673,9 +774,6 @@ void loop() {
   server.handleClient();
   output.update();
   logRadarStatus();
-  if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry > 15000) {
-    lastWifiRetry = millis();
-    WiFi.reconnect();
-  }
+  wifiFallback.update();
   delay(2);
 }

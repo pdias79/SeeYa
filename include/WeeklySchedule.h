@@ -3,23 +3,24 @@
 #include <Preferences.h>
 #include <time.h>
 
-// One optional local-time interval per day; supports crossing midnight.
-// tm_wday uses Sunday=0. Slots are stored Monday=0 through Sunday=6.
+// Ten weekly ON/OFF commands, Monday bit 0 through Sunday bit 6.
+// Disabled actions are ignored; most recent scheduled command wins.
 class WeeklySchedule {
 public:
-  struct Day {
-    bool enabled = false;
-    uint16_t startMin = 1080;  // 18:00
-    uint16_t endMin = 1320;    // 22:00
+  enum Action : uint8_t { Disabled=0, On=1, Off=2 };
+  static constexpr size_t SlotCount=10;
+  struct Slot {
+    Action action=Disabled;
+    uint16_t minute=1080; // 18:00
+    uint8_t days=0x7f;  // Monday..Sunday
   };
-  void begin(Preferences &preferences);
-  const Day &day(size_t mondayBasedIndex) const { return days_[mondayBasedIndex]; }
-  static bool valid(const Day &day);
-  bool setDay(size_t mondayBasedIndex, const Day &day);
-  bool active(const tm &localTime) const;
+  void begin(Preferences &prefs);
+  const Slot &slot(size_t i) const { return slots_[i]; }
+  bool setSlot(size_t i,const Slot &s);
+  bool requestedOn(const tm &local) const;
   void save();
+  static bool valid(const Slot &s);
 private:
-  Preferences *prefs_ = nullptr;
-  Day days_[7];
-  static bool inRange(const Day &day, uint16_t minute);
+  Preferences *prefs_=nullptr;
+  Slot slots_[SlotCount];
 };

@@ -12,6 +12,7 @@ public:
   void configure(const String &ssid, const String &password, const String &apName);
   bool accessPointActive() const { return apActive_; }
   const String &ssid() const { return ssid_; }
+  const String &password() const { return password_; }
   const String &apName() const { return apName_; }
   bool configured() const { return ssid_.length()>0; }
   static bool validApName(const String &name);

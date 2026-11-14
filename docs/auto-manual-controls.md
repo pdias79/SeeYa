@@ -25,10 +25,18 @@ Nouveaux endpoints :
 
 Ils retournent **409 Conflict** si le mode n'est pas AUTO. `GET /api/status` expose `autoManualActive` et `autoManualOn` pour diagnostiquer l'état ponctuel. Les boutons ponctuels sont désactivés dans l'interface dès que `mode != AUTO`.
 
+## Démarrage et indicateur Wi-Fi
+
+Au démarrage du module, la **sortie lumière est à OFF** et le mode reste AUTO. Même si les automatismes indiquent déjà ON à l'initialisation, cette consigne de démarrage OFF persiste jusqu'au prochain changement de `radarHold` ou de `scheduleOn`, ou jusqu'à une commande manuelle explicite. Les modes forcés ne sont jamais restaurés automatiquement au redémarrage.
+
+La **LED d'état GPIO8 clignote** (250 ms allumée / 750 ms éteinte) tant que le Wi-Fi domestique n'est pas connecté, y compris lorsque le point d'accès de secours fonctionne. Lorsque le Wi-Fi revient, la LED indique de nouveau l'état demandé de l'éclairage. Le relais et les commandes HTTP ne sont pas modifiés par le clignotement. Si la LED d'état a été désactivée dans l'interface, elle reste désactivée.
+
 ## Vérification matérielle
-1. En AUTO sans radar ni plage active, appuyer sur **Allumer** : LED ON, `mode=AUTO`, `autoManualActive=true`.
-2. Produire une présence radar puis attendre la fin de la temporisation : après le changement de `radarHold`, `autoManualActive=false`.
-3. En AUTO avec radar présent, appuyer sur **Éteindre** : LED OFF ; à l'expiration de `radarHold` ou au changement `scheduleOn`, reprise automatique.
+1. Couper puis remettre l'alimentation : sortie lumière OFF au démarrage, même si une plage horaire était déjà ON. Vérifier qu'elle reprend les automatismes au prochain changement.
+2. Déconnecter le Wi-Fi domestique : la LED GPIO8 clignote, sans faire commuter le relais ; la reconnecter et vérifier que la LED reprend son affichage habituel.
+3. En AUTO sans radar ni plage active, appuyer sur **Allumer** : LED ON, `mode=AUTO`, `autoManualActive=true`.
+4. Produire une présence radar puis attendre la fin de la temporisation : après le changement de `radarHold`, `autoManualActive=false`.
+5. En AUTO avec radar présent, appuyer sur **Éteindre** : LED OFF ; à l'expiration de `radarHold` ou au changement `scheduleOn`, reprise automatique.
 4. En `FORCE_ON` et `FORCE_OFF`, vérifier que les boutons ponctuels sont grisés et que leurs endpoints retournent 409.
-5. Cliquer sur **Auto** depuis un mode forcé : sortie immédiatement recalculée.
-6. Vérifier que la configuration Wi-Fi, le radar et les événements sont inchangés.
+7. Cliquer sur **Auto** depuis un mode forcé : sortie immédiatement recalculée.
+8. Vérifier que la configuration Wi-Fi, le radar et les événements sont inchangés.

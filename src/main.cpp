@@ -38,6 +38,10 @@ char localTimeText[32] = "not synchronized";
 uint32_t lastPresenceMs = 0;
 enum class Mode { Auto, ForceOn, ForceOff };
 Mode mode = Mode::Auto;
+bool autoManualActive = false;
+bool autoManualOn = false;
+bool autoSnapshotRadar = false;
+bool autoSnapshotSchedule = false;
 bool otaOk = false;
 bool otaStarted = false;
 
@@ -91,6 +95,21 @@ void updateClockAndSchedule() {
   scheduleOn=schedule.requestedOn(local);
 }
 bool autoLightRequested() { return radarHold || scheduleOn; }
+void applyAutoLight() {
+  if(mode!=Mode::Auto)return;
+  if(autoManualActive &&
+     (radarHold!=autoSnapshotRadar || scheduleOn!=autoSnapshotSchedule))
+    autoManualActive=false;
+  output.request(autoManualActive?autoManualOn:autoLightRequested());
+}
+void resetAutoManual() { autoManualActive=false; }
+void setAutoManual(bool on) {
+  autoManualActive=true;
+  autoManualOn=on;
+  autoSnapshotRadar=radarHold;
+  autoSnapshotSchedule=scheduleOn;
+  output.request(on);
+}
 const char *modeName() {
   switch (mode) {
     case Mode::ForceOn: return "FORCE_ON";
@@ -130,6 +149,10 @@ void status() {
   json += modeName();
   json += "\",\"requestedOn\":";
   json += output.requested() ? "true" : "false";
+  json += ",\"autoManualActive\":";
+  json += autoManualActive ? "true" : "false";
+  json += ",\"autoManualOn\":";
+  json += autoManualOn ? "true" : "false";
   json += ",\"clockReady\":";
   json += clockReady ? "true":"false";
   json += ",\"localTime\":\"";
@@ -223,9 +246,12 @@ small{color:#666}pre{white-space:pre-wrap;word-break:break-word}
 </style></head><body><h1>SeeYa</h1>
 <p>ESP32-C3 — firmware <span id="firmwareVersion">…</span></p>
 <section><h2>Éclairage</h2><pre id="status">Chargement…</pre>
+<button type="button" id="lightForceOn">Forcer Allumé</button>
+<button type="button" id="lightForceOff">Forcer Éteindre</button>
+<button type="button" id="lightAuto">Auto</button>
+<p><small>Commandes ponctuelles uniquement en AUTO. L'automatisme reprend au prochain changement du radar ou des horaires.</small></p>
 <button type="button" id="lightOn">Allumer</button>
 <button type="button" id="lightOff">Éteindre</button>
-<button type="button" id="lightAuto">Auto</button>
 <p id="lightMessage" role="status" aria-live="polite"></p></section>
 <section><h2>Sortie d'éclairage</h2>
 <form onsubmit="saveOutput(event)">
@@ -368,6 +394,9 @@ async function refresh(){
   const r=await fetch('/api/status');const d=await r.json();
   document.getElementById('status').textContent=JSON.stringify(d,null,2);
   document.getElementById('firmwareVersion').textContent=d.version;
+  const isAuto=d.mode==='AUTO';
+  document.getElementById('lightOn').disabled=!isAuto;
+  document.getElementById('lightOff').disabled=!isAuto;
   document.getElementById('clockText').textContent=d.localTime;
   document.getElementById('scheduleText').textContent=d.scheduleOn?'ACTIF':'inactif';
  if(!radarFormDirty)document.getElementById('sensorType').value=d.sensorType;
@@ -397,9 +426,11 @@ async function sendLightCommand(action) {
   console.error('SeeYa light command failed',error);
  }
 }
-document.getElementById('lightOn').addEventListener('click',()=>sendLightCommand('on'));
-document.getElementById('lightOff').addEventListener('click',()=>sendLightCommand('off'));
+document.getElementById('lightForceOn').addEventListener('click',()=>sendLightCommand('on'));
+document.getElementById('lightForceOff').addEventListener('click',()=>sendLightCommand('off'));
 document.getElementById('lightAuto').addEventListener('click',()=>sendLightCommand('auto'));
+document.getElementById('lightOn').addEventListener('click',()=>sendLightCommand('auto/on'));
+document.getElementById('lightOff').addEventListener('click',()=>sendLightCommand('auto/off'));
 async function loadConfig(){
  const r=await fetch('/api/output');const d=await r.json();
  for(const key of ['type','gpio','activeHigh','ledActiveHigh','urlOn','urlOff','httpMethod']){
@@ -545,15 +576,25 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
   server.on("/api/status", HTTP_GET, status);
   server.on("/api/light/on", HTTP_POST, []() {
     if (!authorize()) return;
-    mode = Mode::ForceOn; output.request(true); status();
+    mode = Mode::ForceOn; resetAutoManual(); output.request(true); status();
   });
   server.on("/api/light/off", HTTP_POST, []() {
     if (!authorize()) return;
-    mode = Mode::ForceOff; output.request(false); status();
+    mode = Mode::ForceOff; resetAutoManual(); output.request(false); status();
   });
   server.on("/api/light/auto", HTTP_POST, []() {
     if (!authorize()) return;
-    mode = Mode::Auto; updateClockAndSchedule(); output.request(autoLightRequested()); status();
+    mode = Mode::Auto; resetAutoManual(); updateClockAndSchedule(); applyAutoLight(); status();
+  });
+  server.on("/api/light/auto/on", HTTP_POST, []() {
+    if(!authorize())return;
+    if(mode!=Mode::Auto){server.send(409,"text/plain","AUTO required");return;}
+    updateClockAndSchedule();setAutoManual(true);status();
+  });
+  server.on("/api/light/auto/off", HTTP_POST, []() {
+    if(!authorize())return;
+    if(mode!=Mode::Auto){server.send(409,"text/plain","AUTO required");return;}
+    updateClockAndSchedule();setAutoManual(false);status();
   });
   server.on("/api/schedule", HTTP_GET, [](){
     if(!authorize())return;
@@ -592,7 +633,7 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
     }
     for(size_t i=0;i<WeeklySchedule::SlotCount;++i)schedule.setSlot(i,proposed[i]);
     schedule.save();updateClockAndSchedule();
-    if(mode==Mode::Auto)output.request(autoLightRequested());
+    applyAutoLight();
     server.send(200,"application/json","{\"saved\":true}");
   });
   server.on("/api/radar", HTTP_POST, []() {
@@ -627,7 +668,7 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
     }
     prefs.putUChar("sensorType",sensorType);
     prefs.remove("radarOn");
-    if(mode==Mode::Auto) { updateClockAndSchedule(); output.request(autoLightRequested()); }
+    updateClockAndSchedule(); applyAutoLight();
     status();
   });
   server.on("/api/radar/zone", HTTP_POST, [](){
@@ -784,7 +825,7 @@ void loop() {
     // The holding timer still expires after loss of radar communication.
   } else radarHold=false;
   updateClockAndSchedule();
-  if(mode==Mode::Auto)output.request(autoLightRequested());
+  applyAutoLight();
   server.handleClient();
   output.update();
   logRadarStatus();

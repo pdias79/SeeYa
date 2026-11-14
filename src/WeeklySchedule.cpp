@@ -1,46 +1,59 @@
 #include "WeeklySchedule.h"
 
-bool WeeklySchedule::valid(const Day &d) {
-  return d.startMin < 1440 && d.endMin < 1440 && d.startMin != d.endMin;
+bool WeeklySchedule::valid(const Slot &s) {
+  return s.action<=Off && s.minute<1440 && (s.days & 0x80)==0;
 }
-bool WeeklySchedule::setDay(size_t i, const Day &d) {
-  if (i >= 7 || !valid(d)) return false;
-  days_[i] = d;
-  return true;
+bool WeeklySchedule::setSlot(size_t i,const Slot &s) {
+  if(i>=SlotCount||!valid(s))return false;
+  slots_[i]=s;return true;
 }
 void WeeklySchedule::begin(Preferences &prefs) {
-  prefs_ = &prefs;
-  for (size_t i=0;i<7;++i) {
-    const String stem="sch"+String(i);
-    Day d;
-    d.enabled=prefs.getBool((stem+"e").c_str(),false);
-    d.startMin=prefs.getUShort((stem+"s").c_str(),1080);
-    d.endMin=prefs.getUShort((stem+"f").c_str(),1320);
-    if(valid(d))days_[i]=d;
+  prefs_=&prefs;
+  // New schema deliberately does not interpret the old daily interval keys:
+  // ON/OFF events represent a different semantic model.
+  for(size_t i=0;i<SlotCount;++i) {
+    const String stem="evt"+String(i);
+    Slot s;
+    s.action=static_cast<Action>(prefs.getUChar((stem+"a").c_str(),0));
+    s.minute=prefs.getUShort((stem+"m").c_str(),1080);
+    s.days=prefs.getUChar((stem+"d").c_str(),0x7f);
+    if(valid(s))slots_[i]=s;
   }
 }
 void WeeklySchedule::save() {
   if(!prefs_)return;
-  for(size_t i=0;i<7;++i) {
-    const String stem="sch"+String(i);
-    prefs_->putBool((stem+"e").c_str(),days_[i].enabled);
-    prefs_->putUShort((stem+"s").c_str(),days_[i].startMin);
-    prefs_->putUShort((stem+"f").c_str(),days_[i].endMin);
+  for(size_t i=0;i<SlotCount;++i) {
+    const String stem="evt"+String(i);
+    const Slot &s=slots_[i];
+    prefs_->putUChar((stem+"a").c_str(),s.action);
+    prefs_->putUShort((stem+"m").c_str(),s.minute);
+    prefs_->putUChar((stem+"d").c_str(),s.days);
   }
 }
-bool WeeklySchedule::inRange(const Day &day, uint16_t minute) {
-  return day.enabled && minute>=day.startMin && minute<day.endMin;
-}
-bool WeeklySchedule::active(const tm &localTime) const {
-  // Monday-based indexing. Check yesterday for intervals that span midnight.
-  const size_t today=(localTime.tm_wday+6)%7;
-  const size_t yesterday=(today+6)%7;
-  const uint16_t minute=localTime.tm_hour*60+localTime.tm_min;
-  const Day &now=days_[today];
-  const Day &prev=days_[yesterday];
-  if(now.enabled) {
-    if(now.startMin<now.endMin && inRange(now,minute))return true;
-    if(now.startMin>now.endMin && minute>=now.startMin)return true;
+bool WeeklySchedule::requestedOn(const tm &local) const {
+  // Search the past seven days and today's elapsed minutes. A command
+  // persists until the next eligible command. At equal instants, the
+  // higher-numbered slot wins for deterministic behavior.
+  const int today=(local.tm_wday+6)%7;
+  const int minute=local.tm_hour*60+local.tm_min;
+  int bestAge=8*1440;
+  int bestIndex=-1;
+  Action selected=Off;
+  for(size_t i=0;i<SlotCount;++i) {
+    const Slot &s=slots_[i];
+    if(s.action==Disabled||!s.days)continue;
+    for(int back=0;back<7;++back) {
+      const int weekday=(today-back+7)%7;
+      if(!(s.days & (1<<weekday)))continue;
+      int age=back*1440+minute-int(s.minute);
+      if(age<0)continue;
+      if(age<bestAge || (age==bestAge && int(i)>bestIndex)) {
+        bestAge=age;
+        bestIndex=int(i);
+        selected=s.action;
+      }
+      break; // latest eligible instance of this slot
+    }
   }
-  return prev.enabled && prev.startMin>prev.endMin && minute<prev.endMin;
+  return selected==On;
 }

@@ -29,9 +29,13 @@ WeeklySchedule schedule;
 WifiFallback wifiFallback;
 // 0 = disabled; 1 = LD2410C; 2 = LD2450
 uint8_t sensorType = 0;
-uint32_t offDelaySeconds = 90;
+uint32_t onDelaySeconds = 15;
+uint32_t offDelayMinutes = 15;
+uint32_t offDelaySeconds = 900;
 bool radarHold = false;
 bool previousPresence = false;
+uint32_t presenceSinceMs = 0;
+uint32_t absenceSinceMs = 0;
 bool scheduleOn = false;
 bool clockReady = false;
 char localTimeText[32] = "not synchronized";
@@ -195,6 +199,10 @@ void status() {
   json += presence ? "true" : "false";
   json += ",\"radarHold\":";
   json += radarHold ? "true" : "false";
+  json += ",\"onDelaySeconds\":";
+  json += String(onDelaySeconds);
+  json += ",\"offDelayMinutes\":";
+  json += String(offDelayMinutes);
   json += ",\"offDelaySeconds\":";
   json += String(offDelaySeconds);
   json += ",\"movingDistanceCm\":";
@@ -293,13 +301,15 @@ small{color:#666}pre{white-space:pre-wrap;word-break:break-word}
 <p><small>Lors du changement de configuration, la sortie locale est remise à OFF.
 Le protocole HTTP est limité à des URL http:// dans cette version expérimentale.</small></p>
 </form></section>
-<section><h2>LD2410C</h2>
+<section><h2>Détection radar</h2>
 <form onsubmit="saveRadar(event)">
 <label>Capteur <select id="sensorType">
 <option value="disabled">Désactivé</option>
 <option value="ld2410c">LD2410C</option>
 <option value="ld2450">LD2450</option></select></label>
-<label>Délai extinction (secondes) <input id="offDelay" type="number" min="1" max="86400" value="90"></label>
+<label>Présence continue avant allumage (secondes) <input id="onDelay" type="number" min="0" max="3600" value="15"></label>
+<label>Absence avant extinction (minutes) <input id="offDelay" type="number" min="1" max="1440" value="15"></label>
+<p><small>En AUTO : une présence doit durer sans interruption jusqu'au délai d'allumage. Une nouvelle présence pendant l'attente d'extinction annule cette attente.</small></p>
 <button type="submit">Enregistrer</button>
 </form><small>UART 256000 bauds : TX radar vers GPIO4, RX radar vers GPIO5.
 La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</small>
@@ -405,6 +415,7 @@ loadSchedule().catch(e=>document.getElementById('scheduleMessage').textContent=e
 loadWifi().catch(e=>document.getElementById('wifiMessage').textContent=e.message);
 let radarFormDirty=false;
 document.getElementById('sensorType').addEventListener('change',()=>{radarFormDirty=true;});
+document.getElementById('onDelay').addEventListener('input',()=>{radarFormDirty=true;});
 document.getElementById('offDelay').addEventListener('input',()=>{radarFormDirty=true;});
 async function refresh(){
  try {
@@ -426,7 +437,10 @@ async function refresh(){
  document.getElementById('targetView').textContent=(d.targets||[])
    .filter(t=>t.valid).map(t=>'X='+t.xMm+' mm, Y='+t.yMm+
      ' mm, vitesse='+t.speedCmS+' cm/s, retenue='+t.insideZone).join(' | ')||'Aucune cible';
- if(!radarFormDirty)document.getElementById('offDelay').value=d.offDelaySeconds;
+ if(!radarFormDirty) {
+  document.getElementById('onDelay').value=d.onDelaySeconds;
+  document.getElementById('offDelay').value=d.offDelayMinutes;
+ }
  }catch(e){document.getElementById('status').textContent='ESP indisponible';}
 }
 async function sendLightCommand(action) {
@@ -459,7 +473,8 @@ async function saveRadar(e) {
  e.preventDefault();
  const d=new URLSearchParams();
  d.set('type',document.getElementById('sensorType').value);
- d.set('offDelay',document.getElementById('offDelay').value);
+ d.set('onDelay',document.getElementById('onDelay').value);
+ d.set('offDelayMin',document.getElementById('offDelay').value);
  const r=await fetch('/api/radar',{method:'POST',body:d});
  if(!r.ok){alert('Radar non enregistré : '+await r.text());return;}
  radarFormDirty=false;
@@ -655,24 +670,35 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
   });
   server.on("/api/radar", HTTP_POST, []() {
     if (!authorize()) return;
-    String seconds = server.arg("offDelay");
-    if (seconds.isEmpty() || seconds.length() > 5) {
-      server.send(400, "text/plain", "Invalid delay"); return;
-    }
-    for (size_t i=0;i<seconds.length();++i) {
-      if (!isDigit(seconds[i])) { server.send(400,"text/plain","Expected integer");return; }
-    }
-    uint32_t value=seconds.toInt();
-    if(value<1 || value>86400) {
-      server.send(400,"text/plain","Delay out of range");return;
+    // Both timings are user-configurable and validated before NVS changes.
+    auto parseNumber=[](const String &raw, uint32_t min, uint32_t max, uint32_t &value)->bool {
+      if(raw.isEmpty() || raw.length()>5)return false;
+      for(size_t i=0;i<raw.length();++i)if(!isDigit(raw[i]))return false;
+      value=(uint32_t)raw.toInt();
+      return value>=min && value<=max;
+    };
+    uint32_t newOnDelay=0, newOffDelayMin=0;
+    if(!parseNumber(server.arg("onDelay"),0,3600,newOnDelay) ||
+       !parseNumber(server.arg("offDelayMin"),1,1440,newOffDelayMin)) {
+      server.send(400,"text/plain","Invalid radar delays");return;
     }
     const String newType=server.arg("type");
     uint8_t next=0;
     if(newType=="ld2410c")next=1;
     else if(newType=="ld2450")next=2;
     else if(newType!="disabled"){server.send(400,"text/plain","Invalid radar");return;}
-    offDelaySeconds=value;
-    prefs.putUInt("offDelay",offDelaySeconds);
+    const bool delayChanged=(onDelaySeconds!=newOnDelay || offDelayMinutes!=newOffDelayMin);
+    onDelaySeconds=newOnDelay;
+    offDelayMinutes=newOffDelayMin;
+    offDelaySeconds=offDelayMinutes*60UL;
+    prefs.putUInt("radOnSec",onDelaySeconds);
+    prefs.putUInt("radOffMin",offDelayMinutes);
+    if(delayChanged) {
+      // Restart timing from the present moment, preventing stale elapsed timers.
+      previousPresence=false;
+      presenceSinceMs=millis();
+      absenceSinceMs=millis();
+    }
     if(sensorType!=next) {
       if(sensorType)radarUart.end();
       sensorType=next;
@@ -680,6 +706,8 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
       else if(sensorType==2)radar2450.begin(radarUart,4,5);
       radarHold=false;
       previousPresence=false;
+      presenceSinceMs=millis();
+      absenceSinceMs=millis();
       lastRadarLogMs=millis()-2000;
       Serial.printf("[SeeYa] Radar selection: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
     }
@@ -803,8 +831,13 @@ void setup() {
   prefs.begin("seeya", false);
   output.begin(prefs);
   schedule.begin(prefs);
-  offDelaySeconds=prefs.getUInt("offDelay",90);
-  if(offDelaySeconds<1 || offDelaySeconds>86400)offDelaySeconds=90;
+  // New preference keys deliberately start with 15 s / 15 min defaults.
+  // Legacy "offDelay" (seconds) is left untouched but no longer loaded.
+  onDelaySeconds=prefs.getUInt("radOnSec",15);
+  if(onDelaySeconds>3600)onDelaySeconds=15;
+  offDelayMinutes=prefs.getUInt("radOffMin",15);
+  if(offDelayMinutes<1 || offDelayMinutes>1440)offDelayMinutes=15;
+  offDelaySeconds=offDelayMinutes*60UL;
   sensorType=prefs.getUChar("sensorType",prefs.getBool("radarOn",false)?1:0);
   if(sensorType>2)sensorType=0;
   LD2450Presence::Zone z;
@@ -835,16 +868,25 @@ void loop() {
   if(sensorType) {
     if(sensorType==1)radar.update();
     else radar2450.update();
-    uint32_t now=millis();
+    const uint32_t now=millis();
     const bool presence=sensorType==1?radar.present():radar2450.present();
+    if(presence!=previousPresence) {
+      // A single loss of presence restarts the continuous-presence timer.
+      if(presence)presenceSinceMs=now;
+      else absenceSinceMs=now;
+      previousPresence=presence;
+    }
     if(presence) {
-      lastPresenceMs=now;
-      radarHold=true;
-    } else if(radarHold && (uint32_t)(now-lastPresenceMs)>=offDelaySeconds*1000UL) {
+      if(!radarHold && (uint32_t)(now-presenceSinceMs)>=onDelaySeconds*1000UL)
+        radarHold=true;
+    } else if(radarHold && (uint32_t)(now-absenceSinceMs)>=offDelaySeconds*1000UL) {
       radarHold=false;
     }
-    // The holding timer still expires after loss of radar communication.
-  } else radarHold=false;
+    // Connection loss is treated as absent once radar.present() is false.
+  } else {
+    radarHold=false;
+    previousPresence=false;
+  }
   updateClockAndSchedule();
   applyAutoLight();
   server.handleClient();

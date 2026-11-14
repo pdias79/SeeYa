@@ -3,7 +3,6 @@
 namespace {
 constexpr uint32_t retryMs=15000;
 constexpr uint32_t fallbackDelayMs=12000;
-constexpr char apPassword[]="SeeYaSetup"; // WPA2 password, documented for local setup
 const IPAddress apIp(192,168,4,1);
 }
 bool WifiFallback::validApName(const String &name) {
@@ -23,12 +22,12 @@ void WifiFallback::startAp() {
   if(apActive_)return;
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(apIp,apIp,IPAddress(255,255,255,0));
-  if(!WiFi.softAP(apName_.c_str(),apPassword)) {
+  if(!WiFi.softAP(apName_.c_str())) {
     Serial.println("[WiFi] Fallback AP start failed");return;
   }
   dns_.start(53,"*",apIp);
   apActive_=true;
-  Serial.printf("[WiFi] Captive AP SSID=%s IP=%s\n",apName_.c_str(),apIp.toString().c_str());
+  Serial.printf("[WiFi] Open captive AP SSID=%s IP=%s\n",apName_.c_str(),apIp.toString().c_str());
 }
 void WifiFallback::stopAp() {
   if(!apActive_)return;

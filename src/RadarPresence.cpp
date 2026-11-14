@@ -11,6 +11,7 @@ void RadarPresence::begin(HardwareSerial &port, int rxPin, int txPin) {
   everReceived_ = false;
   targetState_ = 0;
   frames_ = 0;
+  bytesReceived_ = 0;
   port_->setRxBufferSize(1024);
   port_->begin(256000, SERIAL_8N1, rxPin, txPin);
 }
@@ -57,5 +58,5 @@ void RadarPresence::update() {
   if(!port_) return;
   // Limit work per iteration to keep the web server responsive.
   size_t count=0;
-  while(port_->available() && count++ < 128) consume(uint8_t(port_->read()));
+  while(port_->available() && count++ < 128) {++bytesReceived_; consume(uint8_t(port_->read()));}
 }

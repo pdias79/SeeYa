@@ -143,7 +143,13 @@ void redirectToSetup() {
     "content='0;url=http://192.168.4.1/setup'></head><body>"
     "<a href='http://192.168.4.1/setup'>Configurer SeeYa</a></body></html>");
 }
+// An empty administrator password intentionally enables unrestricted HTTP
+// access. Keep this check centralized so OTA uploads follow the same policy.
+bool adminAuthenticationRequired() {
+  return SEEYA_ADMIN_PASSWORD[0] != '\0';
+}
 bool authorize() {
+  if (!adminAuthenticationRequired()) return true;
   if (server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return true;
   server.requestAuthentication(BASIC_AUTH, "SeeYa");
   return false;
@@ -763,7 +769,7 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
       if (success) { server.client().flush(); delay(250); ESP.restart(); }
       otaStarted = false;
     }, []() {
-      if (!server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return;
+      if (adminAuthenticationRequired() && !server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return;
       HTTPUpload &upload = server.upload();
       if (upload.status == UPLOAD_FILE_START) {
         otaStarted = true;
@@ -812,8 +818,12 @@ void setup() {
   else if(sensorType==2)radar2450.begin(radarUart,4,5);
   Serial.printf("[SeeYa] Radar initial: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
   if (String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
-    Serial.println("ERROR: set WiFi and unique admin password in include/secrets.h");
+    Serial.println("ERROR: replace the example administrator password in include/secrets.h (empty is allowed)");
     return;
+  }
+  if (!adminAuthenticationRequired()) {
+    Serial.println("[SeeYa] WARNING: HTTP authentication disabled (empty admin password).");
+    Serial.println("[SeeYa] Web UI, lighting API, configuration and OTA are unrestricted.");
   }
   const char *initialSsid=String(SEEYA_WIFI_SSID)=="CHANGE_ME_WIFI"?"":SEEYA_WIFI_SSID;
   wifiFallback.begin(prefs,initialSsid,SEEYA_WIFI_PASSWORD);

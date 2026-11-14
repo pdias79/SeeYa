@@ -329,8 +329,7 @@ void setup() {
   radarEnabled=prefs.getBool("radarOn",false);
   if(radarEnabled)radar.begin(radarUart,4,5);
   if (String(SEEYA_WIFI_SSID) == "CHANGE_ME_WIFI" ||
-      String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD" ||
-      strlen(SEEYA_ADMIN_PASSWORD) < 12) {
+      String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
     Serial.println("ERROR: set WiFi and unique admin password in include/secrets.h");
     return;
   }

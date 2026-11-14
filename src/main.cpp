@@ -195,13 +195,16 @@ La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</
 <button type="submit">Installer firmware.bin</button></form>
 <p><small>Ne pas couper l'alimentation durant le transfert.</small></p></section>
 <script>
+let radarFormDirty=false;
+document.getElementById('sensorType').addEventListener('change',()=>{radarFormDirty=true;});
+document.getElementById('offDelay').addEventListener('input',()=>{radarFormDirty=true;});
 async function refresh(){
  try {
   const r=await fetch('/api/status');const d=await r.json();
   document.getElementById('status').textContent=JSON.stringify(d,null,2);
   document.getElementById('firmwareVersion').textContent=d.version;
- document.getElementById('sensorType').value=d.sensorType;
- document.getElementById('zoneSection').hidden=d.sensorType!=='ld2450';
+ if(!radarFormDirty)document.getElementById('sensorType').value=d.sensorType;
+ document.getElementById('zoneSection').hidden=document.getElementById('sensorType').value!=='ld2450';
  const zoneKeys=['zoneMinX','zoneMaxX','zoneMinY','zoneMaxY'];
  for(const key of zoneKeys) {
    if(document.activeElement.id!==key)document.getElementById(key).value=d[key];
@@ -210,7 +213,7 @@ async function refresh(){
  document.getElementById('targetView').textContent=(d.targets||[])
    .filter(t=>t.valid).map(t=>'X='+t.xMm+' mm, Y='+t.yMm+
      ' mm, vitesse='+t.speedCmS+' cm/s, retenue='+t.insideZone).join(' | ')||'Aucune cible';
- if(document.activeElement.id!=='offDelay')document.getElementById('offDelay').value=d.offDelaySeconds;
+ if(!radarFormDirty)document.getElementById('offDelay').value=d.offDelaySeconds;
  }catch(e){document.getElementById('status').textContent='ESP indisponible';}
 }
 async function sendLightCommand(action) {
@@ -243,8 +246,9 @@ async function saveRadar(e) {
  d.set('type',document.getElementById('sensorType').value);
  d.set('offDelay',document.getElementById('offDelay').value);
  const r=await fetch('/api/radar',{method:'POST',body:d});
- if(!r.ok)alert(await r.text());
- refresh();
+ if(!r.ok){alert('Radar non enregistré : '+await r.text());return;}
+ radarFormDirty=false;
+ await refresh();
 }
 async function saveZone(e) {
  e.preventDefault();

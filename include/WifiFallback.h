@@ -4,7 +4,7 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 
-// STA first; temporary WPA2 access point + captive DNS while offline.
+// STA first; temporary OPEN access point + captive DNS while offline.
 class WifiFallback {
 public:
   void begin(Preferences &prefs, const char *defaultSsid, const char *defaultPassword);

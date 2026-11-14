@@ -42,7 +42,7 @@ bool WeeklySchedule::requestedOn(const tm &local) const {
   for(size_t i=0;i<SlotCount;++i) {
     const Slot &s=slots_[i];
     if(s.action==Disabled||!s.days)continue;
-    for(int back=0;back<7;++back) {
+    for(int back=0;back<=7;++back) {
       const int weekday=(today-back+7)%7;
       if(!(s.days & (1<<weekday)))continue;
       int age=back*1440+minute-int(s.minute);

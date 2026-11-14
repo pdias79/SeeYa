@@ -1,7 +1,7 @@
 # Premier flash et OTA (jalon 0.2.0-dev)
 1. Installer VS Code et l'extension PlatformIO.
 2. Cloner le dépôt et ouvrir le dossier.
-3. Copier `include/secrets.example.h` vers `include/secrets.h`. Renseigner le SSID Wi-Fi 2,4 GHz, son mot de passe et un mot de passe d'administration **unique** d'au moins 12 caractères.
+3. Copier `include/secrets.example.h` vers `include/secrets.h`. Renseigner le SSID Wi-Fi 2,4 GHz, son mot de passe et un mot de passe d'administration (sans longueur minimale imposée).
 4. **Débrancher toute charge secteur et tout relais pour le premier essai** : brancher la SuperMini en USB-C.
 5. Depuis PlatformIO : Build puis Upload, et ouvrir le moniteur série à 115200 bauds. Vérifier l'adresse IP depuis le routeur DHCP si besoin.
 6. Visiter `http://<ip-esp>/`, se connecter avec l'utilisateur `admin` et le mot de passe configuré.

@@ -21,10 +21,11 @@ Nouvelle configuration sauvegardée en NVS sous les clés evt0..evt9. Les ancien
 - Si le STA ne se connecte pas dans ~12 secondes, le module démarre un réseau AP+STA de secours. Il retente la connexion STA toutes les ~15 secondes et désactive son AP lorsque celle-ci réussit.
 - Sans SSID domestique configuré, le secours s'active immédiatement.
 - Nom par défaut : `SeeYa_XXXXXX` avec 6 chiffres hexadécimaux tirés de l'adresse MAC matérielle (suffixe de 24 bits).
-- Mot de passe provisoire WPA2 de l'AP : **SeeYaSetup**. À changer avant un déploiement exposé à des utilisateurs non fiables (fonction de changement non encore implémentée).
+- Le réseau de secours est **ouvert**, sans mot de passe, pour faciliter la configuration. Toute personne à portée peut s'y connecter et modifier la configuration Wi-Fi pendant son activation.
 - L'AP du module répond sur **192.168.4.1** et offre un serveur DNS de capture résolvant toutes les requêtes vers cette IP.
-- Les routes de sondes Android, Apple et Windows redirigent HTTP vers `http://192.168.4.1/setup`; la page de paramétrage autorise les clients de l'AP de secours, sans identification admin supplémentaire (le WPA2 AP est requis).
-- Certains OS n'ouvrent pas automatiquement la page, notamment si le HTTPS forcé ou les données cellulaires priment : ouvrir `http://192.168.4.1/setup` manuellement.
+- Les routes de sondes Android, Apple et Windows redirigent HTTP vers `http://192.168.4.1/setup`; la page de paramétrage autorise les clients de l'AP de secours, sans identification admin supplémentaire.
+- Les routes de détection ont été étendues (notamment /canonical.html, /success.txt et /fwlink), avec diagnostic sur le moniteur USB.
+- Certains OS n'ouvrent pas automatiquement la page, notamment si le HTTPS forcé, les DNS privés ou les données cellulaires priment : ouvrir `http://192.168.4.1/setup` manuellement.
 - Le portail et l'API sont uniquement en HTTP local. Ne pas exposer le module ou le Wi-Fi de secours directement à Internet.
 
 ## API
@@ -40,10 +41,10 @@ Nouvelle configuration sauvegardée en NVS sous les clés evt0..evt9. Les ancien
 1. Sur la version précédente, noter l'ancienne programmation, car elle ne sera pas migrée.
 2. Sauvegarder un événement ON sur tous les jours quelques minutes avant l'heure courante et un OFF quelques minutes après ; contrôler `scheduleOn`, `requestedOn` et LED.
 3. Vérifier jours différents, deux événements à la même heure, passage minuit, mode AUTO avec radar actif, commandes FORCE_ON/OFF.
-4. Éteindre temporairement le routeur Wi-Fi ; après une quinzaine de secondes, détecter `SeeYa_XXXXXX`, s'y connecter avec `SeeYaSetup`, vérifier l'apparition du portail ou ouvrir `http://192.168.4.1/setup`.
+4. Éteindre temporairement le routeur Wi-Fi ; après une quinzaine de secondes, détecter `SeeYa_XXXXXX`, s'y connecter sans mot de passe, vérifier l'apparition du portail ou ouvrir `http://192.168.4.1/setup`.
 5. Configurer le SSID domestique depuis le portail ; remettre le routeur, vérifier reconnexion STA, fermeture AP et accès au SeeYa sur son IP réseau.
 6. Renommer le SSID de secours et vérifier sa persistance au redémarrage.
 7. Tester sur Android, iOS et Windows (ouverture automatique non garantie par les systèmes).
 
 ## Limites de cette version
-Pas encore de protection par mot de passe AP unique par appareil, pas de sélection/scanning Wi-Fi sur portail, pas de détection d'erreur de mot de passe STA, et pas de banc de tests matériels automatisés.
+Le réseau de secours ouvert permet à un tiers à portée de changer la configuration Wi-Fi lorsqu'il est actif ; pas de sélection/scanning Wi-Fi sur portail, pas de détection d'erreur de mot de passe STA, et pas de banc de tests matériels automatisés.

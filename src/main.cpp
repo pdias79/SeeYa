@@ -108,7 +108,10 @@ bool portalClient() {
 void redirectToSetup() {
   server.sendHeader("Location","http://192.168.4.1/setup",true);
   server.sendHeader("Cache-Control","no-store");
-  server.send(302,"text/plain","");
+  server.send(302,"text/html; charset=utf-8",
+    "<!doctype html><html><head><meta http-equiv='refresh' "
+    "content='0;url=http://192.168.4.1/setup'></head><body>"
+    "<a href='http://192.168.4.1/setup'>Configurer SeeYa</a></body></html>");
 }
 bool authorize() {
   if (server.authenticate("admin", SEEYA_ADMIN_PASSWORD)) return true;
@@ -445,12 +448,19 @@ void setupRoutes() {
   });
   // Captive portal detection on Android, iOS and Windows. All paths redirect
   // only while serving the temporary access point, not on the home network.
+  // Captive portal probes used by Android, iOS/macOS, Windows and Firefox.
+  // An HTTP redirect is deliberately NOT the expected probe response (204 or
+  // "Success"), so the OS can offer its captive-network assistant.
   const char *probePaths[]={"/generate_204","/gen_204","/hotspot-detect.html",
-    "/library/test/success.html","/connecttest.txt","/ncsi.txt","/redirect"};
+    "/library/test/success.html","/connecttest.txt","/ncsi.txt","/redirect",
+    "/canonical.html","/success.txt","/fwlink","/mobile/status.php",
+    "/kindle-wifi/wifistub.html","/captive-portal"};
   for(const char *path:probePaths) {
     server.on(path, HTTP_GET, [](){
-      if(portalClient())redirectToSetup();
-      else server.send(204,"text/plain","");
+      if(portalClient()) {
+        Serial.printf("[WiFi] Captive probe: %s\\n",server.uri().c_str());
+        redirectToSetup();
+      } else server.send(204,"text/plain","");
     });
   }
   server.on("/setup", HTTP_GET, [](){
@@ -716,7 +726,11 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
       }
     });
   server.onNotFound([]() {
-    if(portalClient()){redirectToSetup();return;}
+    if(portalClient()) {
+      Serial.printf("[WiFi] Captive HTTP redirect: %s\\n",server.uri().c_str());
+      redirectToSetup();
+      return;
+    }
     if (!authorize()) return;
     server.send(404, "text/plain", "Not found");
   });

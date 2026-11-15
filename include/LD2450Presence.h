@@ -19,7 +19,7 @@ public:
     int16_t minY = 0;
     int16_t maxY = 4000;
   };
-  void begin(HardwareSerial &port, int rxPin=4, int txPin=5);
+  void begin(HardwareSerial &port, int rxPin=20, int txPin=21);
   void update();
   bool healthy() const { return everReceived_ && (uint32_t)(millis()-lastFrameMs_)<2500; }
   bool present() const;

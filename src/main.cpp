@@ -22,6 +22,10 @@ namespace {
 WebServer server(80);
 Preferences prefs;
 LightOutput output;
+// UART1 is routed to the ESP32-C3's usual UART GPIO pins.
+// Native USB CDC diagnostic serial remains on GPIO18/19.
+constexpr int RADAR_RX_PIN = 20; // ESP RX <- radar TX
+constexpr int RADAR_TX_PIN = 21; // ESP TX -> radar RX
 HardwareSerial radarUart(1);
 RadarPresence radar;
 LD2450Presence radar2450;
@@ -314,7 +318,7 @@ Le protocole HTTP est limité à des URL http:// dans cette version expérimenta
 <label>Absence avant extinction (minutes) <input id="offDelay" type="number" min="1" max="1440" value="15"></label>
 <p><small>En AUTO : une présence doit durer sans interruption jusqu'au délai d'allumage. Une nouvelle présence pendant l'attente d'extinction annule cette attente.</small></p>
 <button type="submit">Enregistrer</button>
-</form><small>UART 256000 bauds : TX radar vers GPIO4, RX radar vers GPIO5.
+</form><small>UART 256000 bauds : TX radar vers GPIO20, RX radar vers GPIO21.
 La sélection d'un nouveau radar remplace l'ancien, sans modifier le câblage.</small>
 </section>
 <section id="zoneSection"><h2>LD2450 — Position des cibles</h2>
@@ -848,8 +852,8 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
     if(sensorType!=next) {
       if(sensorType)radarUart.end();
       sensorType=next;
-      if(sensorType==1)radar.begin(radarUart,4,5);
-      else if(sensorType==2)radar2450.begin(radarUart,4,5);
+      if(sensorType==1)radar.begin(radarUart,RADAR_RX_PIN,RADAR_TX_PIN);
+      else if(sensorType==2)radar2450.begin(radarUart,RADAR_RX_PIN,RADAR_TX_PIN);
       radarHold=false;
       previousPresence=false;
       presenceSinceMs=millis();
@@ -996,7 +1000,7 @@ document.getElementById('setupForm').addEventListener('submit',async e=>{
 void setup() {
   Serial.begin(115200);
   Serial.println("[SeeYa] Boot - USB serial monitor 115200 bauds");
-  Serial.println("[SeeYa] Radar UART1: ESP RX=GPIO4 (radar TX), ESP TX=GPIO5 (radar RX), 256000 bauds");
+  Serial.println("[SeeYa] Radar UART1: ESP RX=GPIO20 (radar TX), ESP TX=GPIO21 (radar RX), 256000 bauds");
   prefs.begin("seeya", false);
   output.begin(prefs);
   schedule.begin(prefs);
@@ -1016,8 +1020,8 @@ void setup() {
   z.minY=prefs.getShort("zMinY",0);
   z.maxY=prefs.getShort("zMaxY",4000);
   if(LD2450Presence::validZone(z))radar2450.setZone(z);
-  if(sensorType==1)radar.begin(radarUart,4,5);
-  else if(sensorType==2)radar2450.begin(radarUart,4,5);
+  if(sensorType==1)radar.begin(radarUart,RADAR_RX_PIN,RADAR_TX_PIN);
+  else if(sensorType==2)radar2450.begin(radarUart,RADAR_RX_PIN,RADAR_TX_PIN);
   Serial.printf("[SeeYa] Radar initial: %s\n",sensorType==1?"LD2410C":(sensorType==2?"LD2450":"OFF"));
   if (String(SEEYA_ADMIN_PASSWORD) == "CHANGE_ME_ADMIN_PASSWORD") {
     Serial.println("ERROR: replace the example administrator password in include/secrets.h (empty is allowed)");

@@ -5,7 +5,7 @@
 // LD2410C basic target data frames. No engineering configuration in v1.
 class RadarPresence {
 public:
-  void begin(HardwareSerial &port, int rxPin=4, int txPin=5);
+  void begin(HardwareSerial &port, int rxPin=20, int txPin=21);
   void update();
   bool present() const { return healthy() && targetState_ != 0; }
   bool healthy() const { return everReceived_ && (uint32_t)(millis() - lastFrameMs_) < 2500; }

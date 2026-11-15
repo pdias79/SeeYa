@@ -176,7 +176,7 @@ Exemple de configuration pour une sortie HTTP (URL fictives) :
 
 ## Carte de développement retenue (provisoire)
 - ESP32-C3 SuperMini (format environ 18 x 23 mm, USB-C), d'après photographie fournie.
-- Affectation GPIO proposée : GPIO4 = RX radar (relié à TX du radar), GPIO5 = TX radar (relié à RX du radar), GPIO7 = commande relais.
+- Affectation GPIO proposée : GPIO20 = RX radar (relié à TX du radar), GPIO21 = TX radar (relié à RX du radar), GPIO7 = commande relais.
 - Masse commune, alimentation radar à vérifier suivant module; ne pas alimenter la bobine d'un relais directement par le GPIO.
 - GPIO2, GPIO8, GPIO9 sont des broches de strapping à éviter pour ce projet ; GPIO8 porte généralement une LED embarquée et GPIO9 le bouton BOOT. GPIO18/19 restent réservées à l'USB natif.
 - Les valeurs de tension, la polarité du relais et la disponibilité d'une alimentation 5 V suffisante restent à valider avant branchement.
